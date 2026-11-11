@@ -138,6 +138,7 @@ describe("no inline styles (CSP style-src has no unsafe-inline)", function () {
     const html = read("public/index.html");
     assert.ok(html.indexOf('id="sidenav"') !== -1, "drawer/sidebar markup required");
     assert.ok(html.indexOf('id="navScrim"') !== -1, "drawer scrim required");
+    assert.match(read("public/styles.css"), /\[data-view\]\[hidden\]\s*\{\s*display:\s*none\s*!important;/, "inactive views must remain hidden even when they have custom display styles");
     assert.ok(html.indexOf('id="catGrid" class="sp-homegrid"') !== -1, "home service cards must use the wide-card grid");
     assert.ok(html.indexOf('id="homeSearch"') !== -1 && html.indexOf('id="homeLoc"') !== -1, "home search row required");
     for (const v of ["home", "services", "history", "diag", "account", "privacy", "admin"]) {
