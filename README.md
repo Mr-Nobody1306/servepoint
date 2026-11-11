@@ -59,44 +59,7 @@ Setup (3 minutes):
   node server.js
   # open http://localhost:8000
 
-Needs Node.js 18+ (node -v). Zero dependencies — npm install is not
-required. Run npm test any time to re-verify the split. GET /api/health
-shows whether Server AI is configured (never the key).
 
-Without a Groq key the app still runs: /api/chat answers 503 and the
-chat falls back to built-in keyword triage on the phone.
-
-Deploying (VPS, Render, Railway…):
-
-1. Upload everything EXCEPT .env (it is git-ignored).
-2. Set GROQ_API_KEY in the host dashboard (plus GROQ_MODEL, PORT if changed).
-   Fill public/config.js with your public Supabase/Paystack values.
-3. Run node server.js (or npm start). Put HTTPS in front (host TLS):
-   enable the host's "force HTTPS" option. Only if the host cannot do
-   the redirect itself, set FORCE_HTTPS=1 so this server 301-redirects
-   http to https (requires the proxy to send X-Forwarded-Proto).
-4. HSTS rollout: the server sends `Strict-Transport-Security: max-age=300`
-   by default. Once HTTPS is stable, raise it in stages via the env:
-   HSTS_MAX_AGE=86400, then HSTS_MAX_AGE=31536000, and only at the end
-   HSTS_INCLUDE_SUBDOMAINS=1. Short periods first so a bad TLS setup
-   self-heals instead of bricking the site for a year.
-5. Supabase redirect URLs (REQUIRED for Google login): in your Supabase
-   dashboard go to Authentication -> URL Configuration and add your live
-   URL to Redirect URLs, e.g. https://YOUR-APP.onrender.com/** (keep the
-   localhost entry for local testing). The app builds its login redirect
-   from the current origin, so no code change is needed — but until the
-   live URL is allowlisted, Google login bounces back to localhost.
-6. Render: create a Node Web Service (start command: node server.js, or
-   npm start). Put GROQ_API_KEY in the host environment dashboard —
-   never upload .env. A plain Static Site serving public/ also runs the
-   app, but only the Web Service gives you server AI + security headers
-   (on a static host the assistant falls back to on-device triage).
-   After every redeploy: Render dashboard -> Manual Deploy -> Clear
-   build cache & deploy, then hard-refresh your browser (Ctrl+Shift+R).
-   If pages ever look "stacked", open devtools console and compare
-   window.APP_REV with the latest rev — a stale cached bundle is the
-   cause; the router hides every view except the active one, so two
-   visible pages always means mismatched files.
 
 Response headers (every static + API response carries them):
 
@@ -140,15 +103,4 @@ Response headers (every static + API response carries them):
   helper; JS-driven changes (toast, timeline, avatar) use CSSOM property
   sets, which style-src does not block.
 
-The Perchance preview variant (index.html + main.pjs at the project root)
-cannot send HTTP headers — the platform serves it. All of the above
-applies to THIS package only.
 
-Rotating a leaked key: revoke it at console.groq.com, put the new one in
-.env (or the host dashboard), restart. Nothing in the frontend changes.
-
-Relation to the Perchance preview: the Perchance generator (index.html +
-main.pjs at the project root) calls Groq directly from the browser with a
-key pasted in main.pjs — the only way a pure client-side preview can reach
-Groq, and anyone can copy that key. Treat the preview key as disposable
-(dedicated key, tight limits) and run THIS secure package for real use.
