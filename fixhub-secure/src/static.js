@@ -4,7 +4,7 @@
    (server.js, src/, .env) returns 404 — the key cannot be downloaded.
    Hardened response headers (see README "Response headers"):
    - CSP without 'unsafe-inline' (markup/JS use classes only; JS-driven
-     style changes go through CSSOM, which style-src does not block).
+     style changes go through CSSOM, which the CSP does not block).
    - HSTS (short max-age rollout; raise HSTS_MAX_AGE once HTTPS is stable),
      COOP same-origin-allow-popups (OAuth + Paystack popups need window.opener),
      COEP credentialless, CORP same-origin.

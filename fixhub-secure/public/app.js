@@ -12,7 +12,11 @@ const CFG = {
   supabaseUrl: publicSetting("supabaseUrl"),
   supabaseKey: publicSetting("supabaseAnonKey")
 };
-const LIVE_PAY = CFG.paystackKey && CFG.paystackKey.indexOf("PASTE") !== 0 && typeof PaystackPop !== "undefined";
+function hasLivePaystack() {
+  const key = (CFG.paystackKey || "").trim();
+  return !!key && key.indexOf("PASTE") !== 0 && key.indexOf("YOUR_") !== 0 && typeof window !== "undefined" && !!window.PaystackPop;
+}
+const LIVE_PAY = hasLivePaystack();
 const LIVE_DB = CFG.supabaseUrl && CFG.supabaseUrl.indexOf("PASTE") !== 0 && CFG.supabaseKey && CFG.supabaseKey.indexOf("PASTE") !== 0;
 window.APP_REV = "secure-2026-11-12";
 
@@ -346,7 +350,19 @@ async function ensureProfile() {
 /* ---------- tiny router ---------- */
 const VIEWS = ["home", "diag", "services", "account", "privacy", "book1", "book2", "track", "pay", "history", "admin"];
 let privacyFrom = "account";
+function requireSignedInForProtectedView(name) {
+  const protectedViews = ["services", "book1", "book2", "track", "pay", "history"];
+  if (!protectedViews.includes(name)) return true;
+  const signedIn = !!(Auth && typeof Auth.googleUid === "function" && Auth.googleUid()) && !!(S && S.profile);
+  if (!signedIn) {
+    toast("Please sign in with Google before accessing services and bookings.");
+    if (name !== "account") show("account");
+    return false;
+  }
+  return true;
+}
 function show(name) {
+  if (!requireSignedInForProtectedView(name)) return;
   VIEWS.forEach(v => { const el = document.getElementById("view-" + v); if (el) el.hidden = (v !== name); });
   closeNav();
   const appEl = document.getElementById("app");
@@ -404,14 +420,6 @@ function ensureBurgers() {
     h.insertBefore(b, h.firstChild);
     wireBurger(b);
   });
-  const crumb = document.querySelector("#view-admin .sp-crumbrow");
-  if (crumb && !crumb.querySelector(".burgerBtn")) {
-    const b = document.createElement("button");
-    b.className = "burgerBtn";
-    b.setAttribute("aria-label", "Open navigation");
-    crumb.insertBefore(b, crumb.firstChild);
-    wireBurger(b);
-  }
 }
 document.addEventListener("click", (e) => {
   const g = e.target.closest("[data-goto]");
@@ -423,8 +431,6 @@ document.addEventListener("click", (e) => {
   }
   const b = e.target.closest("[data-back]");
   if (b) { show(b.dataset.back); return; }
-  const at = e.target.closest("[data-atab]");
-  if (at) { setAdminTab(at.dataset.atab); return; }
   const c = e.target.closest("[data-close]");
   if (c) { document.getElementById(c.dataset.close).hidden = true; }
 });

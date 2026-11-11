@@ -1,7 +1,17 @@
 /* ServePoint Ghana — PART 5: app logic B (booking, tracking, payment, history, AI chat). Extracted from index.html; loads after app.js. */
 /* ---------- booking flow ---------- */
 let draft = S.draft || null;
+function ensureLoggedInForBooking() {
+  const signedIn = !!(Auth && typeof Auth.googleUid === "function" && Auth.googleUid()) && !!(S && S.profile);
+  if (!signedIn) {
+    toast("Please sign in with Google before booking a service.");
+    show("account");
+    return false;
+  }
+  return true;
+}
 function startBooking(serviceId) {
+  if (!ensureLoggedInForBooking()) return;
   draft = { serviceId, desc: "", area: (S.homeArea || AREAS[0]), addr: "", date: new Date().toISOString().slice(0, 10), slot: SLOTS[1], voiceSecs: 0, photo: null, voiceUrl: null };
   S.draft = draft; persist();
   fillBook1();
@@ -59,6 +69,7 @@ function priceOf(serviceId, senior) {
   return { service: s.base, transport: TRANSPORT, discount, total: s.base + TRANSPORT - discount };
 }
 document.getElementById("toStep2Btn").onclick = () => {
+  if (!ensureLoggedInForBooking()) return;
   if (!draft.addr.trim()) { toast("Add your street / landmark so the artisan finds you"); document.getElementById("addrInput").focus(); return; }
   if (!draft.date) { toast("Pick a preferred day"); return; }
   S.draft = draft; persist();
@@ -83,6 +94,7 @@ function row2(k, v, green) {
 }
 function escapeHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 document.getElementById("dispatchBtn").onclick = async () => {
+  if (!ensureLoggedInForBooking()) return;
   if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js, then reload"); return; }
   const p = priceOf(draft.serviceId, S.senior);
   const t = TECHS[draft.serviceId];
@@ -350,17 +362,19 @@ document.getElementById("payBtn").onclick = () => {
   if (!b) return;
   const m = payMethod();
   if (m === "Cash to Artisan") { completeBooking(b, m); return; }
-  if (!LIVE_PAY || typeof PaystackPop === "undefined") { toast("Payment not connected yet — add your Paystack public key in public/config.js, then reload"); return; }
+  const paystackReady = typeof window !== "undefined" && !!window.PaystackPop && !!(CFG.paystackKey || "").trim() && String(CFG.paystackKey).indexOf("PASTE") !== 0 && String(CFG.paystackKey).indexOf("YOUR_") !== 0;
+  if (!paystackReady) { toast("Payment not connected yet — add your Paystack public key in public/config.js, then reload"); return; }
   const session = Auth.load() || {};
   const email = session.email || ("customer-" + String(Auth.uid() || "guest").replace(/[^a-zA-Z0-9]/g, "") + "@servepoint.gh");
-  const handler = PaystackPop.setup({
-    key: CFG.paystackKey,
+  const amountGhs = Number(b.total) || 0;
+  const handler = window.PaystackPop.setup({
+    key: String(CFG.paystackKey).trim(),
     email,
-    amount: Math.round(Number(b.total) * 100),
+    amount: Math.max(1, Math.round(amountGhs * 100)),
     currency: "GHS",
     ref: b.id + "-" + Date.now(),
-    metadata: { booking: b.id, service: b.serviceId, method: m, total: b.total },
-    channels: ["mobile_money"],
+    metadata: { booking: b.id, service: b.serviceId, method: m, total: amountGhs },
+    channels: ["card", "bank", "mobile_money"],
     callback: (resp) => {
       try { b.payRef = resp && resp.reference ? resp.reference : null; } catch (e) {}
       completeBooking(b, m);
@@ -790,7 +804,6 @@ function renderAccount() {
         ? '<button id="googleBtn" class="btn-dark mt-3 w-full font-display font-bold f15 rounded-2xl py-4 mh56 flex items-center justify-center gap-2"><svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#fff" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.6h3.2c1.9-1.7 3-4.3 3-7.5z"/><path fill="#fff" opacity=".8" d="M12 22c2.7 0 5-1 6.6-2.5l-3.2-2.6c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.7A10 10 0 0 0 12 22z"/><path fill="#fff" opacity=".8" d="M6.4 13.8a6 6 0 0 1 0-3.6V7.5H3.1a10 10 0 0 0 0 9z"/><path fill="#fff" opacity=".8" d="M12 5.9c1.5 0 2.8.5 3.8 1.5L18.7 4A10 10 0 0 0 3.1 7.5l3.3 2.5c.8-2.3 3-4.1 5.6-4.1z"/></svg> Continue with Google</button>'
         : '<p class="f13 soft mt-3 glasscard p-3">Google login + live bookings + real MoMo payments activate once you add your Supabase + Paystack keys in public/config.js (see README.md). You can still look around as a guest.</p>'}
       <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line" data-goto="home">Continue as guest</button>
-      <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line" data-goto="admin">Administration dashboard</button>
       <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
       <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="privacy">Privacy & data safety</button>
       <p class="f11 soft mt-2">Guests can browse the app. Booking and payments go live once the backend keys are added.</p>
@@ -830,7 +843,6 @@ function renderAccount() {
     <button id="saveTradeBtn" class="mt-2 w-full btn-dark font-display font-bold f14 rounded-2xl py-3.5 mh52">Save trade</button>
   </div>` : ""}
   <button id="logoutBtn" class="mt-3 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-red-200 text-cancel bg-white">Log out</button>
-  <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="admin">Administration dashboard</button>
   <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
   <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="privacy">Privacy & data safety</button>`;
   const st = document.getElementById("saveTradeBtn");
