@@ -16,7 +16,7 @@ How the split protects the key:
 - public/index.html contains ZERO secrets. Its only AI call is
   fetch("/api/chat") on the same server (plus the documented public
   APIs: your Supabase project, Paystack popup, Google Fonts,
-  BigDataCloud reverse-geocode, geojs.io IP area fallback).
+  BigDataCloud reverse-geocode).
 - The assistant's instructions live in src/persona.js on the server —
   visitors cannot read or override them. The server also allowlists the
   trade (plumbing..hvac) before answering.
@@ -80,6 +80,23 @@ Deploying (VPS, Render, Railway…):
    HSTS_MAX_AGE=86400, then HSTS_MAX_AGE=31536000, and only at the end
    HSTS_INCLUDE_SUBDOMAINS=1. Short periods first so a bad TLS setup
    self-heals instead of bricking the site for a year.
+5. Supabase redirect URLs (REQUIRED for Google login): in your Supabase
+   dashboard go to Authentication -> URL Configuration and add your live
+   URL to Redirect URLs, e.g. https://YOUR-APP.onrender.com/** (keep the
+   localhost entry for local testing). The app builds its login redirect
+   from the current origin, so no code change is needed — but until the
+   live URL is allowlisted, Google login bounces back to localhost.
+6. Render: create a Node Web Service (start command: node server.js, or
+   npm start). Put GROQ_API_KEY in the host environment dashboard —
+   never upload .env. A plain Static Site serving public/ also runs the
+   app, but only the Web Service gives you server AI + security headers
+   (on a static host the assistant falls back to on-device triage).
+   After every redeploy: Render dashboard -> Manual Deploy -> Clear
+   build cache & deploy, then hard-refresh your browser (Ctrl+Shift+R).
+   If pages ever look "stacked", open devtools console and compare
+   window.APP_REV with the latest rev — a stale cached bundle is the
+   cause; the router hides every view except the active one, so two
+   visible pages always means mismatched files.
 
 Response headers (every static + API response carries them):
 
@@ -102,7 +119,7 @@ Response headers (every static + API response carries them):
     media-src 'self' blob:;             blob: = photo/voice object URLs —
                                         functionally required, kept here only)
     connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net
-      https://js.paystack.co https://api.paystack.co;
+      https://get.geojs.io https://js.paystack.co https://api.paystack.co;
     frame-src 'self' https://js.paystack.co https://checkout.paystack.com;
     object-src 'none'; base-uri 'self'; form-action 'self';
     frame-ancestors 'self'; upgrade-insecure-requests
