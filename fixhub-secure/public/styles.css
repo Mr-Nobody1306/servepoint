@@ -180,6 +180,7 @@ body { color: #2A2320; }
 .carshadow { filter: drop-shadow(0 3px 4px rgba(60,30,10,.35)); }
 .diagbar { background: rgba(255,255,255,.7); backdrop-filter: blur(18px); -webkit-backdrop-filter: blur(18px); border: 1px solid rgba(255,255,255,.95); box-shadow: 0 8px 24px rgba(122,72,38,.16); border-radius: 9999px; }
 .diagabove { bottom: 12px; }
+#diagChat > div { scroll-margin-bottom: 120px; }
 /* ===== index.html <style> #4 ===== */
 /* ---- ServePoint responsive layer (pure CSS, no frameworks) ----
    phones: single column · tablets: wider column · desktop: two-column grids */

@@ -1,5 +1,7 @@
 /* ServePoint Ghana — PART 4: app logic A (config, data, backend, router, home). Extracted from index.html; order matters (loads before flows.js). */
-/* ServePoint — PART 4 (secure split: public keys in config.js, Groq key in server .env) */
+/* ServePoint — PART 4 (secure split). Public keys come from public/config.js
+   (window.FIXHUB_CONFIG, filled with your Supabase + Paystack values).
+   The Groq key lives only in the server .env — never in this file. */
 function publicSetting(name) {
   if (typeof window !== "undefined" && window.FIXHUB_CONFIG && window.FIXHUB_CONFIG[name]) return String(window.FIXHUB_CONFIG[name]);
   if (typeof root !== "undefined" && root[name]) return String(root[name]);
@@ -12,7 +14,7 @@ const CFG = {
 };
 const LIVE_PAY = CFG.paystackKey && CFG.paystackKey.indexOf("PASTE") !== 0 && typeof PaystackPop !== "undefined";
 const LIVE_DB = CFG.supabaseUrl && CFG.supabaseUrl.indexOf("PASTE") !== 0 && CFG.supabaseKey && CFG.supabaseKey.indexOf("PASTE") !== 0;
-
+window.APP_REV = "secure-2026-11-12";
 
 const SERVICES = [
   { id: "plumbing", name: "Plumbing", base: 80, tint: "#E0F2FE", color: "#0369A1", blurb: "Leaks, pipes, tanks & fittings",
@@ -114,7 +116,7 @@ const Auth = {
     return n;
   },
   loginWithGoogle() {
-    if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in main.pjs, then reload"); return; }
+    if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in public/config.js, then reload"); return; }
     const redirect = this.topUrl() + "?oauth=done";
     const url = CFG.supabaseUrl + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(redirect);
     const w = window.open(url, "fixhub_login", "width=480,height=680");
@@ -345,7 +347,7 @@ async function ensureProfile() {
 const VIEWS = ["home", "diag", "services", "account", "privacy", "book1", "book2", "track", "pay", "history", "admin"];
 let privacyFrom = "account";
 function show(name) {
-  VIEWS.forEach(v => { document.getElementById("view-" + v).hidden = (v !== name); });
+  VIEWS.forEach(v => { const el = document.getElementById("view-" + v); if (el) el.hidden = (v !== name); });
   closeNav();
   const appEl = document.getElementById("app");
   if (appEl) appEl.classList.toggle("wide", name === "admin");
@@ -619,7 +621,7 @@ function renderHomeExtras() {
 async function renderJobs() {
   const box = document.getElementById("jobsList");
   if (!box) return;
-  if (!LIVE_DB) { box.innerHTML = '<div class="glasscard p-4"><p class="font-display font-bold f15">Backend not connected</p><p class="f13 soft mt-1">Open requests appear here once you add your Supabase URL + anon key in main.pjs and reload.</p></div>'; return; }
+  if (!LIVE_DB) { box.innerHTML = '<div class="glasscard p-4"><p class="font-display font-bold f15">Backend not connected</p><p class="f13 soft mt-1">Open requests appear here once you add your Supabase URL + anon key in public/config.js and reload.</p></div>'; return; }
   box.innerHTML = '<p class="f14 soft">Finding open requests…</p>';
   let jobs = [];
   try { jobs = await Backend.openJobs(); } catch (e) { jobs = []; }
@@ -641,7 +643,7 @@ async function renderJobs() {
   });
 }
 async function applyForJob(j) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   if (!S.profile || S.profile.role !== "artisan" || !Auth.googleUid()) { toast("Log in as an artisan to apply"); show("account"); return; }
   try {
     await Backend.apply(j);
@@ -660,20 +662,20 @@ function adminStatusPill(st) {
   return '<span class="sp-pill sp-pill-amber">Awaiting review</span>';
 }
 async function approveApplication(id) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   try { await Backend.setApplication(id, "accepted"); toast("Approved — the artisan can start"); }
   catch (e) { toast("Could not approve — check your connection"); }
   renderAdmin();
 }
 async function suspendApplication(id) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   try { await Backend.setApplication(id, "declined"); toast("Application suspended"); }
   catch (e) { toast("Could not suspend — check your connection"); }
   renderAdmin();
 }
 function adminSetupCard(msg) {
   return `<div class="sp-card"><p class="sp-card-title">Backend not connected</p>
-    <p class="f13 sp-soft mt-1">${msg || "Add your Supabase URL + anon key in main.pjs and sign in with Google to see live numbers here."}</p></div>`;
+    <p class="f13 sp-soft mt-1">${msg || "Add your Supabase URL + anon key in public/config.js and sign in with Google to see live numbers here."}</p></div>`;
 }
 async function renderAdmin() {
   const g = Auth.googleUid();
