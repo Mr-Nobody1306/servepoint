@@ -902,7 +902,7 @@ function renderAccount() {
         trade: document.getElementById("acctTrade").value,
         area: document.getElementById("acctArea").value
       });
-      await Auth.updateMetadata({ artisan_phone: details.phone });
+      await Backend.saveArtisanPhone(details.phone);
       S.profile.phone = details.phone;
       persist();
       renderAccount();

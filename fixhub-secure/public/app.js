@@ -120,20 +120,6 @@ const Auth = {
     this.persist(n);
     return n;
   },
-  async updateMetadata(data) {
-    const s = await this.session();
-    if (!s || !s.access) throw new Error("No active user session");
-    const r = await fetch(CFG.supabaseUrl + "/auth/v1/user", {
-      method: "PUT",
-      headers: { apikey: CFG.supabaseKey, Authorization: "Bearer " + s.access, "Content-Type": "application/json" },
-      body: JSON.stringify({ data })
-    });
-    if (!r.ok) throw new Error("Could not save account details");
-    const u = await r.json();
-    const n = Object.assign({}, s, { artisanPhone: ((u && u.user_metadata) || {}).artisan_phone || null });
-    this.persist(n);
-    return n;
-  },
   loginWithGoogle() {
     if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in public/config.js, then reload"); return; }
     const redirect = this.topUrl() + "?oauth=done";
@@ -302,6 +288,15 @@ const Backend = {
     S.profile = Object.assign({}, S.profile, patch);
     persist();
     return S.profile;
+  },
+  async artisanPhone(artisanId) {
+    const rows = await this.sbGet("artisan_private_details?select=phone&artisan_id=eq." + encodeURIComponent(artisanId) + "&limit=1");
+    return rows && rows[0] ? rows[0].phone : null;
+  },
+  async saveArtisanPhone(phone) {
+    const artisanId = Auth.googleUid();
+    if (!artisanId) throw new Error("Sign in as an artisan to save contact details");
+    await this.sbSend("artisan_private_details", "POST", { artisan_id: artisanId, phone }, "resolution=merge-duplicates");
   }
 };
 function bookingToRow(b) {
@@ -327,7 +322,13 @@ async function ensureProfile() {
     const rows = await r.json();
     if (rows && rows[0]) {
       S.profile = rowToProfile(rows[0]);
-      S.profile.phone = me.artisanPhone || null;
+      if (S.profile.role === "artisan") {
+        S.profile.phone = await Backend.artisanPhone(me.uid);
+        if (!S.profile.phone && me.artisanPhone) {
+          await Backend.saveArtisanPhone(me.artisanPhone);
+          S.profile.phone = me.artisanPhone;
+        }
+      }
       persist();
       try { updateAvatar(); } catch (e) {}
       return S.profile;
@@ -342,7 +343,6 @@ async function ensureProfile() {
       area: role === "artisan" ? (pending && pending.area) || null : null,
       rating: 5.0, jobs: 0
     };
-    if (role === "artisan" && pending && pending.phone) await Auth.updateMetadata({ artisan_phone: pending.phone });
     const profileToken = await Auth.bearer();
     const w = await fetch(CFG.supabaseUrl + "/rest/v1/profiles", {
       method: "POST",
@@ -350,6 +350,7 @@ async function ensureProfile() {
       body: JSON.stringify(body)
     });
     if (!w.ok) throw 0;
+    if (role === "artisan" && pending && pending.phone) await Backend.saveArtisanPhone(pending.phone);
     S.profile = { id: me.uid, role, name: body.name, phone: role === "artisan" ? pending.phone : null, trade: body.trade, area: body.area, rating: 5.0, jobs: 0 };
     persist();
     try { localStorage.removeItem("fixhub_pending_role"); } catch (e) {}

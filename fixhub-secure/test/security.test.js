@@ -75,15 +75,22 @@ describe("currency and artisan profile behavior", function () {
     const app = read("public/app.js");
     const flows = read("public/flows.js");
     const styles = read("public/styles.css");
+    const schema = read("src/artisan-private-details.sql");
     assert.match(flows, /id="acctName"/);
     assert.match(flows, /id="acctPhone"/);
     assert.match(flows, /id="artisanFields"[\s\S]*?\$\{acctRole === "artisan" \? "" : "hidden"\}/);
     assert.match(styles, /#artisanFields\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
     assert.match(flows, /label for="acctName"/);
     assert.match(flows, /label for="acctPhone"/);
-    assert.match(flows, /Auth\.updateMetadata\(\{ artisan_phone: details\.phone \}\)/);
+    assert.match(flows, /Backend\.saveArtisanPhone\(details\.phone\)/);
     assert.match(app, /artisanPhone: meta\.artisan_phone \|\| null/);
+    assert.match(app, /artisan_private_details\?select=phone&artisan_id=eq\./);
+    assert.match(app, /artisan_private_details", "POST"/);
     assert.match(app, /profiles\?select=id,role,name,trade,area,rating,jobs&role=eq\.artisan/);
+    assert.match(schema, /alter table public\.artisan_private_details enable row level security/);
+    assert.match(schema, /using \(artisan_id = auth\.uid\(\)\)/);
+    assert.match(schema, /with check \(artisan_id = auth\.uid\(\)\)/);
+    assert.match(schema, /on conflict \(artisan_id\) do nothing/);
   });
 });
 describe("hardened response headers", function () {
