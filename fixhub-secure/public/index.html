@@ -114,7 +114,9 @@
       </div>
 
       <div class="px-4 mt-4" id="jobsWrap" hidden>
-        <h2 class="font-display font-extrabold f16 px-1">Open requests near you</h2>
+        <h2 class="font-display font-extrabold f16 px-1">My accepted requests</h2>
+        <div id="assignedJobsList" class="mt-2 space-y-2"></div>
+        <h2 class="font-display font-extrabold f16 px-1 mt-4">Open requests near you</h2>
         <p class="f12 soft px-1">Apply and the customer picks their artisan</p>
         <div id="jobsList" class="mt-2 space-y-2"></div>
       </div>
@@ -278,13 +280,13 @@
       <div id="trackBody" class="px-4 mt-3 space-y-3">
        <div class="bg-ink text-white rounded-2xl p-4 flex items-center gap-3 shadow-card">
          <span class="live-dot"></span>
-         <p class="font-display font-bold f15 leading-snug" id="liveBanner">LIVE DISPATCH: Emmanuel is on his way!</p>
+         <p class="font-display font-bold f15 leading-snug" id="liveBanner">Waiting for a matching artisan to accept</p>
        </div>
         <div id="routeAlert" class="route-alert" hidden>
           <svg class="w-5 h-5 flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
           <span id="routeAlertText">Artisan branched off the planned route — rerouting…</span>
         </div>
-        <div class="rounded-3xl p-2 glasscard">
+        <div class="rounded-3xl p-2 glasscard" hidden>
           <div class="relative rounded-2xl overflow-hidden">
             <svg id="mapSvg" viewBox="0 0 340 210" class="w-full block" aria-label="Live technician map">
               <rect x="0" y="0" width="340" height="210" rx="16" fill="#FBE9D4"/>
@@ -329,33 +331,33 @@
             </svg>
             <span class="arrival">
               <span class="block font-bold soft f10">Arriving</span>
-              <span class="block font-display font-extrabold f14" id="mapEtaMin">12 min</span>
+              <span class="block font-display font-extrabold f14" id="mapEtaMin">Not shared</span>
             </span>
           </div>
         </div>
         <div class="bg-white border border-line rounded-2xl shadow-card p-4">
           <div class="flex items-center justify-between">
             <div>
-              <p class="f12 text-ink-soft font-semibold">ESTIMATED ARRIVAL</p>
-              <p class="font-display font-extrabold f24" id="etaText">In about 15 min</p>
+              <p class="f12 text-ink-soft font-semibold">BOOKING STATUS</p>
+              <p class="font-display font-extrabold f24" id="etaText">Waiting for an artisan</p>
             </div>
-            <button id="refreshEtaBtn" class="f12 font-bold text-trust border border-trust/30 rounded-full px-3 py-2 mh40">Refresh</button>
+            <button id="refreshEtaBtn" class="f12 font-bold text-trust border border-trust/30 rounded-full px-3 py-2 mh40">Refresh status</button>
           </div>
           <div class="mt-3 flex items-center gap-2">
             <span class="w-3 h-3 rounded-full bg-trust flex-none"></span>
             <div class="route-line flex-1"></div>
             <svg class="w-5 h-5 text-impact-deep flex-none" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 11l19-8-8 19-2.5-8.5z"/></svg>
           </div>
-         <p class="f12h text-ink-soft mt-2" id="routeText">Departing from Spintex Road, Accra</p>
-          <p class="f12 mt-1 flex items-center gap-2"><span id="gpsMeta" class="soft">Live GPS · waiting for signal…</span><span id="offPill" class="offpill live">On route</span></p>
+         <p class="f12h text-ink-soft mt-2" id="routeText">Waiting for the assigned artisan to update the booking.</p>
+          <p class="f12 mt-1 flex items-center gap-2"><span id="gpsMeta" class="soft">GPS tracking is not available yet</span><span id="offPill" class="offpill live">Waiting</span></p>
         </div>
         <div class="bg-white border border-line rounded-2xl shadow-card p-4">
           <div class="flex items-center gap-3">
             <span id="techAvatar" class="w-14 h-14 rounded-full bg-trust-tint text-trust-deep font-display font-extrabold f20 grid place-items-center flex-none">E</span>
             <div class="flex-1 min-w-0">
-              <p id="techName" class="font-display font-extrabold f16">Emmanuel Mensah</p>
-              <p id="techTitle" class="f13 text-ink-soft">Master Plumber</p>
-              <p class="f13 mt-0.5"><span class="text-impact-deep font-bold">★</span> <span id="techRating" class="font-bold">4.9</span> <span class="text-ink-soft">(<span id="techJobs">142</span> fixes)</span></p>
+              <p id="techName" class="font-display font-extrabold f16">Waiting for an artisan</p>
+              <p id="techTitle" class="f13 text-ink-soft">No artisan assigned yet</p>
+              <p class="f13 mt-0.5"><span class="text-impact-deep font-bold">★</span> <span id="techRating" class="font-bold">—</span> <span class="text-ink-soft">(<span id="techJobs">—</span> fixes)</span></p>
             </div>
             <span class="inline-flex items-center gap-1 f11 font-extrabold text-white bg-trust px-2.5 py-1.5 rounded-full flex-none">
               <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2l7 3v6c0 5-3.5 8.5-7 10-3.5-1.5-7-5-7-10V5z"/><path d="M9 12l2 2 4-4"/></svg>
@@ -363,11 +365,11 @@
             </span>
           </div>
           <div class="grid grid-cols-2 gap-2 mt-3">
-            <a id="callTechBtn" href="tel:+233244123456" class="flex items-center justify-center gap-2 bg-trust text-white font-display font-bold f13 leading-tight text-center rounded-2xl px-2 py-3.5 mh52">
+            <a id="callTechBtn" hidden class="flex items-center justify-center gap-2 bg-trust text-white font-display font-bold f13 leading-tight text-center rounded-2xl px-2 py-3.5 mh52">
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.13.96.36 1.9.7 2.8a2 2 0 0 1-.45 2.1L8.1 9.9a16 16 0 0 0 6 6l1.3-1.25a2 2 0 0 1 2.1-.45c.9.34 1.84.57 2.8.7A2 2 0 0 1 22 16.9z"/></svg>
               Call Now
             </a>
-            <a id="waTechBtn" href="https://wa.me/233244123456" target="_blank" rel="noopener" class="flex items-center justify-center gap-2 bg-white border-2 border-trust text-trust font-display font-bold f13 leading-tight text-center rounded-2xl px-2 py-3.5 mh52">
+            <a id="waTechBtn" hidden target="_blank" rel="noopener" class="flex items-center justify-center gap-2 bg-white border-2 border-trust text-trust font-display font-bold f13 leading-tight text-center rounded-2xl px-2 py-3.5 mh52">
               <svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.5L3 21l2-5.4A8.5 8.5 0 1 1 21 11.5z"/></svg>
               WhatsApp
             </a>
@@ -390,6 +392,7 @@
           </div>
         </div>
         <button id="payNowBtn" class="w-full bg-trust text-white font-display font-extrabold f15 rounded-2xl py-4 mh56">Work done? Pay securely now</button>
+        <button id="confirmJobCompleteBtn" hidden class="w-full btn-dark font-display font-extrabold f15 rounded-2xl py-4 mh56">Confirm job complete · release artisan payment</button>
         <button id="cancelBtn" class="w-full text-cancel font-bold f14 rounded-2xl py-3.5 mh52 border border-red-200 bg-white">Cancel Booking (Free of charge)</button>
       </div>
     </section>
@@ -455,6 +458,10 @@
         <p class="f13 text-ink-soft"><span id="backendChip" class="inline-block f11 font-bold bg-slate-200 px-2 py-0.5 rounded-full">Connecting…</span> <span id="histSub">Setting up your backend</span></p>
       </header>
       <div class="px-4 mt-3 space-y-3">
+        <div class="bg-white border border-line rounded-2xl shadow-card p-4">
+          <p class="font-display font-bold f15">Notifications</p>
+          <div id="notificationsList" class="mt-2 space-y-2"><p class="f12 soft">Sign in to receive booking updates.</p></div>
+        </div>
         <div id="activeJobCard"></div>
         <div id="openWrap" hidden>
           <p class="font-display font-bold f15 pt-1">Open requests</p>

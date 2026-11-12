@@ -54,7 +54,7 @@ describe("backend isolation", function () {
     assert.ok(!/gsk_[A-Za-z0-9]/.test(ex), ".env.example must not contain a real key");
   });
   it("every backend module the server loads exists", function () {
-    const names = ["src/config.js", "src/persona.js", "src/ai.js", "src/chat.js", "src/rateLimit.js", "src/static.js"];
+    const names = ["src/config.js", "src/persona.js", "src/ai.js", "src/chat.js", "src/rateLimit.js", "src/static.js", "src/paystack.js"];
     for (const f of names) assert.ok(fs.existsSync(path.join(ROOT, f)), f + " missing");
   });
   it("public config ships placeholders only, never a real key", function () {
@@ -94,14 +94,12 @@ describe("currency and artisan profile behavior", function () {
   });
   it("only lets the customer with an accepted application read an artisan phone", function () {
     const app = read("public/app.js");
-    const flows = read("public/flows.js");
     const schema = read("src/artisan-private-details.sql");
     assert.match(app, /acceptedArtisanContact\(bookingId\)/);
     assert.match(app, /status=eq\.accepted/);
     assert.match(schema, /artisan_private_details_accepted_customer_select/);
     assert.match(schema, /a\.status = 'accepted'/);
     assert.match(schema, /b\.customer_id = auth\.uid\(\)/);
-    assert.match(flows, /digits\.startsWith\("0"\) \? "233"/);
   });
   it("persists booking totals and payment references for receipts", function () {
     const app = read("public/app.js");
@@ -123,6 +121,43 @@ describe("currency and artisan profile behavior", function () {
     assert.match(flows, /"Saving profile…"/);
     assert.match(app, /"Sending application…"/);
     assert.match(styles, /\.is-loading/);
+  });
+  it("uses only real artisans and restricts open jobs by the artisan's saved trade", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    const html = read("public/index.html");
+    const schema = read("src/artisan-private-details.sql");
+    assert.doesNotMatch(app + flows + html, /TECHS|Emmanuel Mensah|Ama Serwaa|Efua Owusu|Kwame Boateng|Yaw Adjei/);
+    assert.match(flows, /artisanId: null, tech: null, techRating: null/);
+    assert.match(flows, /b\.tech \|\| "Waiting for an artisan"/);
+    assert.match(app, /service=eq\./);
+    assert.match(schema, /bookings_skill_scoped_visibility/);
+    assert.match(schema, /applications_matching_trade_insert/);
+  });
+  it("stores and displays notifications for customers and artisans", function () {
+    const flows = read("public/flows.js");
+    const app = read("public/app.js");
+    const schema = read("src/artisan-private-details.sql");
+    assert.match(app, /notifications\?select=id,booking_id,type,message,read_at,created_at/);
+    assert.match(flows, /setInterval\(\(\) => pollNotifications\(true\), 20000\)/);
+    assert.match(schema, /notifications_recipient_select/);
+    assert.match(schema, /servepoint_application_notifications/);
+    assert.match(schema, /servepoint_open_booking_notifications/);
+  });
+  it("keeps payment confirmation and artisan transfers on the server", function () {
+    const server = read("server.js");
+    const payments = read("src/paystack.js");
+    const migration = read("src/artisan-private-details.sql");
+    assert.match(server, /\/api\/paystack\/webhook/);
+    assert.match(payments, /createHmac\("sha512"/);
+    assert.match(payments, /timingSafeEqual/);
+    assert.match(payments, /transaction\/verify/);
+    assert.match(payments, /verified\.currency !== "GHS"/);
+    assert.match(payments, /booking\.total\) \* 0\.9 \* 100/);
+    assert.match(payments, /payout_status=eq\./);
+    assert.match(migration, /booking_payment_state/);
+    assert.match(migration, /artisan_payout_accounts/);
+    assert.doesNotMatch(read("public/app.js") + read("public/flows.js"), /PAYSTACK_SECRET_KEY|SUPABASE_SERVICE_ROLE_KEY/);
   });
 });
 describe("hardened response headers", function () {

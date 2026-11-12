@@ -28,6 +28,10 @@ function loadConfig() {
     groqBaseUrl: String(process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, ""),
     groqModel: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
     groqKey: process.env.GROQ_API_KEY || "",
+    supabaseUrl: String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""),
+    supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
+    supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
+    paystackSecretKey: process.env.PAYSTACK_SECRET_KEY || "",
     rootDir: ROOT_DIR,
     publicDir: path.join(ROOT_DIR, "public"),
     maxBodyBytes: 64 * 1024,
@@ -49,6 +53,7 @@ function loadConfig() {
   const httpsRe = new RegExp("^https://");
   if (!httpsRe.test(cfg.groqBaseUrl)) throw new Error("[config] GROQ_BASE_URL must start with https://");
   if (!cfg.groqModel) throw new Error("[config] GROQ_MODEL must not be empty");
+  if (cfg.supabaseUrl && !/^https:\/\//.test(cfg.supabaseUrl)) throw new Error("[config] SUPABASE_URL must start with https://");
   return Object.freeze(cfg);
 }
 module.exports = loadConfig();

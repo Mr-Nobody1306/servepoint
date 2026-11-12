@@ -7,6 +7,7 @@ const config = require("./src/config");
 const { createRateLimiter } = require("./src/rateLimit");
 const { serveStatic, sendJson, securityHeaders, configureHeaders } = require("./src/static");
 const { handleChat } = require("./src/chat");
+const { handleWebhook, handleBanks, handleRecipient, handleCompletion, handleBookingStatus, handlePaymentStatus } = require("./src/paystack");
 configureHeaders(config);
 const limiter = createRateLimiter({ windowMs: 60 * 1000, max: config.chatMaxPerMin });
 function onRequest(req, res) {
@@ -29,6 +30,49 @@ function onRequest(req, res) {
   }
   if (req.method === "GET" && pathname === "/api/health") {
     return sendJson(res, 200, { ok: true, model: config.groqModel, aiConfigured: config.groqKey.length > 0 });
+  }
+  if (pathname === "/api/paystack/webhook") {
+    Promise.resolve(handleWebhook(req, res, config)).catch((err) => {
+      console.error("[paystack webhook] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+      else { try { res.end(); } catch (e2) {} }
+    });
+    return;
+  }
+  if (pathname === "/api/paystack/banks") {
+    Promise.resolve(handleBanks(req, res, config)).catch((err) => {
+      console.error("[payout banks] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+    });
+    return;
+  }
+  if (pathname === "/api/paystack/recipient") {
+    Promise.resolve(handleRecipient(req, res, config)).catch((err) => {
+      console.error("[payout recipient] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+    });
+    return;
+  }
+  if (pathname === "/api/bookings/complete") {
+    Promise.resolve(handleCompletion(req, res, config)).catch((err) => {
+      console.error("[booking completion] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+    });
+    return;
+  }
+  if (pathname === "/api/bookings/status") {
+    Promise.resolve(handleBookingStatus(req, res, config)).catch((err) => {
+      console.error("[booking status] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+    });
+    return;
+  }
+  if (pathname === "/api/bookings/payment-status") {
+    Promise.resolve(handlePaymentStatus(req, res, config)).catch((err) => {
+      console.error("[payment status] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal error." });
+    });
+    return;
   }
   if (pathname === "/api/chat") {
     if (req.method !== "POST") return sendJson(res, 405, { error: "Use POST." });

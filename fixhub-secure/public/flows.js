@@ -8,6 +8,10 @@ function ensureLoggedInForBooking() {
     show("account");
     return false;
   }
+  if (S.profile.role !== "customer") {
+    toast("Artisan accounts can apply for matching customer requests, not create bookings.");
+    return false;
+  }
   return true;
 }
 function beginButtonBusy(button, label) {
@@ -121,7 +125,6 @@ document.getElementById("dispatchBtn").onclick = async (event) => withButtonBusy
   if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js, then reload"); return; }
   const p = priceOf(draft.serviceId, S.senior);
   const savedDraft = draft;
-  const t = TECHS[draft.serviceId];
   const g = Auth.googleUid();
   const asOpen = !!(g && S.profile && S.profile.role === "customer");
   const b = {
@@ -129,8 +132,8 @@ document.getElementById("dispatchBtn").onclick = async (event) => withButtonBusy
     serviceId: draft.serviceId, desc: draft.desc, area: draft.area, addr: draft.addr,
     date: draft.date, slot: draft.slot, senior: S.senior,
     service: p.service, transport: p.transport, discount: p.discount, total: p.total,
-    tech: asOpen ? null : t.name, techRating: asOpen ? null : Number(t.rating), techJobs: asOpen ? null : t.jobs,
-    status: asOpen ? "open" : "enroute", step: 1, etaMin: 15, prog: 0.06, offRoute: false, method: null,
+    artisanId: null, tech: null, techRating: null, techJobs: null,
+    status: "open", step: 0, etaMin: null, prog: 0, offRoute: false, method: null,
     createdAt: Date.now(), voiceSecs: draft.voiceSecs, hasPhoto: !!draft.photo,
     customerId: asOpen ? g : null
   };
@@ -149,11 +152,8 @@ document.getElementById("dispatchBtn").onclick = async (event) => withButtonBusy
     return;
   }
   if (asOpen) {
-    toast("Request posted! Artisans can now apply");
+    toast("Request posted! Matching artisans have been notified.");
     show("history");
-  } else {
-    toast("Dispatched! " + t.name.split(" ")[0] + " is on the way");
-    show("track");
   }
 });
 
@@ -210,12 +210,10 @@ document.getElementById("photoInput").addEventListener("change", (e) => {
   img.src = URL.createObjectURL(f);
 });
 
-/* ---------- tracking: live GPS simulation + off-route detection ---------- */
+/* ---------- booking status tracking ---------- */
 const STEPS = ["Booking confirmed", "Artisan on the way", "Arrives & inspects", "Repair in progress"];
 function activeBooking() { return S.bookings.find(b => b.id === S.activeId && ["dispatched", "enroute", "arrived", "working"].includes(b.status)) || null; }
 const Track = {
-  timer: null, lastUpdate: 0, saveTick: 0,
-  ensure() { if (!this.timer) this.timer = setInterval(() => this.tick(false), 4000); },
   progOf(b) {
     if (typeof b.prog === "number") return Math.min(1, Math.max(0, b.prog));
     return (b.status === "arrived" || b.status === "working") ? 1 : b.status === "enroute" ? 0.55 : 0.2;
@@ -224,25 +222,9 @@ const Track = {
     const b = activeBooking();
     if (!b) return;
     if (!force && document.getElementById("view-track").hidden) return;
-    if (b.status === "arrived" || b.status === "working") {
-      b.prog = 1; b.offRoute = false;
-    } else {
-      if (!b.offRoute && Math.random() < 0.14 && this.progOf(b) > 0.12 && this.progOf(b) < 0.88) { b.offRoute = true; b.offTicks = 2; }
-      else if (b.offRoute) { b.offTicks = (b.offTicks || 1) - 1; if (b.offTicks <= 0) b.offRoute = false; }
-      const p = Math.min(1, this.progOf(b) + 0.045 + Math.random() * 0.05);
-      b.prog = p;
-      b.etaMin = Math.max(1, Math.round((1 - p) * 22));
-      if (p >= 1) { b.status = "arrived"; b.offRoute = false; b.etaMin = 0; persist(); try { Backend.save(b); } catch (e) {} renderTrack(); toast("Artisan has arrived"); return; }
-      else if (b.status === "dispatched") b.status = "enroute";
-    }
-    this.lastUpdate = Date.now();
-    persist();
-    this.saveTick++;
-    if (LIVE_DB && this.saveTick % 2 === 0) { try { Backend.save(b); } catch (e) {} }
     renderTrack();
   }
 };
-Track.ensure();
 const acceptedArtisanContacts = new Map();
 function acceptedArtisanContact(booking) {
   if (!booking || !booking.customerId) return Promise.resolve(null);
@@ -258,70 +240,70 @@ function acceptedArtisanContact(booking) {
   }
   return acceptedArtisanContacts.get(booking.id);
 }
-function whatsappPhone(phone) {
-  const digits = String(phone || "").replace(/\D/g, "");
-  return digits.startsWith("0") ? "233" + digits.slice(1) : digits;
-}
 function renderTrack() {
   const b = activeBooking();
   document.getElementById("trackEmpty").hidden = !!b;
   document.getElementById("trackBody").hidden = !b;
   if (!b) return;
-  const t = TECHS[b.serviceId] || { name: "ServePoint artisan", title: "CID-checked artisan", rating: "5.0", jobs: 0, phone: "0800349548", wa: "233800349548", from: b.area || "Accra" };
-  const dispName = b.tech || t.name;
+  const dispName = b.tech || "Waiting for an artisan";
   const first = String(dispName).split(" ")[0];
-  const rating = b.techRating != null ? Number(b.techRating).toFixed(1) : t.rating;
-  const jobs = b.techJobs != null ? b.techJobs : t.jobs;
+  const rating = b.techRating != null ? Number(b.techRating).toFixed(1) : "—";
+  const jobs = b.techJobs != null ? b.techJobs : "—";
   const arrived = b.status === "arrived" || b.status === "working";
   const off = !!b.offRoute && !arrived;
+  if (b.payRef && b.customerId && !b._checkingPayment && b.paymentStatus !== "confirmed") {
+    b._checkingPayment = true;
+    Backend.apiGet("/api/bookings/payment-status?bookingId=" + encodeURIComponent(b.id)).then((state) => {
+      b.paymentStatus = state.payment_status;
+      b.payoutStatus = state.payout_status;
+      persist();
+      renderTrack();
+    }).catch((error) => {
+      console.error("[payment status]", error.message);
+    }).finally(() => { b._checkingPayment = false; });
+  }
   document.getElementById("trackRef").textContent = b.id + " · " + svc(b.serviceId).name;
-  document.getElementById("liveBanner").textContent = arrived
-    ? "LIVE: " + first + " is at your location"
-    : off ? "LIVE: " + first + " branched off route — recalculating…"
-    : "LIVE DISPATCH: " + first + " is on his way!";
-  document.getElementById("etaText").textContent = arrived ? "Arrived" : "In about " + b.etaMin + " min";
+  document.getElementById("liveBanner").textContent = !b.artisanId
+    ? "Waiting for a matching artisan to accept"
+    : arrived ? first + " has arrived" : off ? first + " is updating their route" : first + " accepted this request";
+  document.getElementById("etaText").textContent = arrived ? "Arrived" : (b.etaMin ? "ETA " + b.etaMin + " min" : "ETA not provided");
   document.getElementById("routeText").textContent = off
-    ? "Detour detected — " + first + " left the planned route. New ETA " + b.etaMin + " min."
-    : "Departing from " + t.from + (S.homeGeo && S.homeGeo.label ? " → " + S.homeGeo.label : "");
+    ? "The artisan has reported a route update."
+    : b.artisanId ? "Your assigned artisan will provide any travel updates here." : "Your request is waiting for an artisan with the right trade.";
   const alert = document.getElementById("routeAlert");
   if (alert) {
     alert.hidden = !off;
-    if (off) document.getElementById("routeAlertText").textContent = first + " branched off the planned route — rerouting. You are seeing the live detour.";
+    if (off) document.getElementById("routeAlertText").textContent = first + " reported a route change.";
   }
   const pill = document.getElementById("offPill");
   if (pill) {
-    pill.textContent = arrived ? "Arrived" : off ? "Off route" : "On route · live";
+    pill.textContent = arrived ? "Arrived" : off ? "Route update" : b.artisanId ? "Accepted" : "Waiting";
     pill.className = "offpill " + (off ? "off" : "live");
   }
   const meta = document.getElementById("gpsMeta");
   if (meta) {
-    if (!Track.lastUpdate) meta.textContent = "Live GPS · acquiring signal…";
-    else {
-      const s = Math.max(0, Math.round((Date.now() - Track.lastUpdate) / 1000));
-      meta.textContent = "Live GPS · updated " + (s < 3 ? "just now" : s + "s ago");
-    }
+    if (!b.artisanId) meta.textContent = "No artisan assigned yet";
+    else meta.textContent = "GPS tracking is not available yet";
   }
-  document.getElementById("techAvatar").textContent = String(dispName)[0].toUpperCase();
+  document.getElementById("techAvatar").textContent = b.artisanId ? String(dispName)[0].toUpperCase() : "?";
   document.getElementById("techName").textContent = dispName;
-  document.getElementById("techTitle").textContent = b.tech && !TECHS[b.serviceId] ? "Accepted artisan" : t.title;
+  document.getElementById("techTitle").textContent = b.artisanId ? "Accepted artisan" : "No artisan assigned yet";
   document.getElementById("techRating").textContent = rating;
   document.getElementById("techJobs").textContent = jobs;
   const callBtn = document.getElementById("callTechBtn");
   const waBtn = document.getElementById("waTechBtn");
-  callBtn.textContent = b.customerId ? "Loading artisan contact…" : "Call " + first + " Now";
+  callBtn.textContent = b.artisanId ? "Loading artisan contact…" : "Available after acceptance";
   callBtn.removeAttribute("href");
-  waBtn.hidden = !!b.customerId;
-  if (!b.customerId) {
-    callBtn.href = "tel:" + t.phone;
-    waBtn.href = "https://wa.me/" + t.wa + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
-  } else {
+  callBtn.hidden = !b.artisanId;
+  waBtn.hidden = !b.artisanId;
+  if (b.artisanId && b.customerId) {
     acceptedArtisanContact(b).then((contact) => {
       if (S.activeId !== b.id) return;
       if (!contact) { callBtn.textContent = "Artisan contact unavailable"; return; }
       callBtn.href = "tel:" + contact.phone;
       callBtn.textContent = "Call " + first + " Now";
       waBtn.hidden = false;
-      waBtn.href = "https://wa.me/" + whatsappPhone(contact.phone) + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
+      waBtn.href = "https://wa.me/" + contact.phone.replace(/\D/g, "") + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
     }).catch(() => { if (S.activeId === b.id) callBtn.textContent = "Could not load artisan contact"; });
   }
   const idx = b.status === "dispatched" ? 1 : b.status === "enroute" ? 1 : b.status === "arrived" ? 2 : 3;
@@ -342,6 +324,13 @@ function renderTrack() {
   });
   document.getElementById("tlFill").style.height = (idx / (STEPS.length - 1)) * 100 + "%";
   document.getElementById("tlSteps").parentElement.style.setProperty("--x", 1);
+  const completeBtn = document.getElementById("confirmJobCompleteBtn");
+  if (completeBtn) {
+    completeBtn.hidden = !(b.customerId && b.artisanId && arrived && b.paymentStatus === "confirmed");
+    completeBtn.disabled = b.payoutStatus === "processing" || b.payoutStatus === "paid";
+    completeBtn.textContent = b.payoutStatus === "processing" ? "Payout processing…" :
+      b.payoutStatus === "paid" ? "Payout sent" : "Confirm job complete · release artisan payment";
+  }
   try {
     const prog = Track.progOf(b);
     const path = document.getElementById("routePath");
@@ -357,13 +346,13 @@ function renderTrack() {
       }
     }
     const mm = document.getElementById("mapEtaMin");
-    if (mm) mm.textContent = arrived ? "Arrived" : "about " + b.etaMin + " min";
+    if (mm) mm.textContent = arrived ? "Arrived" : (b.etaMin ? "about " + b.etaMin + " min" : "ETA not provided");
   } catch (e) {}
 }
-function bindArtisanContact(link, booking, name, fallbackPhone) {
-  if (!booking.customerId) {
-    link.href = "tel:" + fallbackPhone;
-    link.textContent = "Call " + name;
+function bindArtisanContact(link, booking, name) {
+  if (!booking.customerId || !booking.artisanId) {
+    link.removeAttribute("href");
+    link.textContent = "Artisan not assigned";
     return;
   }
   link.removeAttribute("href");
@@ -377,7 +366,15 @@ function bindArtisanContact(link, booking, name, fallbackPhone) {
     if (link.isConnected) link.textContent = "Could not load artisan contact";
   });
 }
-document.getElementById("refreshEtaBtn").onclick = () => { Track.tick(true); toast("Live location refreshed"); };
+document.getElementById("refreshEtaBtn").onclick = async () => {
+  try {
+    const bookings = await Backend.list();
+    S.bookings = bookings;
+    persist();
+    Track.tick(true);
+    toast("Booking status refreshed.");
+  } catch (error) { toast("Could not refresh booking status."); }
+};
 document.getElementById("payNowBtn").onclick = () => show("pay");
 document.getElementById("cancelBtn").onclick = () => { document.getElementById("cancelDrawer").hidden = false; };
 document.getElementById("confirmCancelBtn").onclick = async (event) => withButtonBusy(event.currentTarget, "Cancelling…", async () => {
@@ -459,6 +456,10 @@ function updatePayBtn() {
 document.getElementById("payBtn").onclick = async (event) => {
   const b = S.bookings.find(x => x.id === S.activeId);
   if (!b) return;
+  if (!b.artisanId || !["arrived", "working"].includes(b.status)) {
+    toast("Payment is available after your accepted artisan arrives.");
+    return;
+  }
   const m = payMethod();
   if (m === "Cash to Artisan") {
     await withButtonBusy(event.currentTarget, "Saving booking…", () => completeBooking(b, m));
@@ -472,24 +473,69 @@ document.getElementById("payBtn").onclick = async (event) => {
   const amountPesewas = Math.round(amountGhs * 100);
   if (!Number.isFinite(amountPesewas) || amountPesewas < 1) { toast("Invalid payment amount — please contact support"); return; }
   const restorePayButton = beginButtonBusy(event.currentTarget, "Waiting for payment…");
-  const handler = window.PaystackPop.setup({
+  const reference = b.payRef || (b.id + "-" + Date.now());
+  b.payRef = reference;
+  b.method = m;
+  b.paymentStatus = "pending";
+  try { await Backend.save(b); }
+  catch (error) {
+    restorePayButton();
+    toast("Could not prepare the payment. Check your connection and try again.");
+    return;
+  }
+  let callbackReceived = false;
+  let handler;
+  try { handler = window.PaystackPop.setup({
     key: String(CFG.paystackKey).trim(),
     email,
     amount: amountPesewas,
     currency: "GHS",
-    ref: b.id + "-" + Date.now(),
+    ref: reference,
     metadata: { booking: b.id, service: b.serviceId, method: m, total: amountGhs },
     channels: ["card", "bank", "mobile_money"],
     callback: (resp) => {
-      try { b.payRef = resp && resp.reference ? resp.reference : null; } catch (e) {}
-      completeBooking(b, m).finally(restorePayButton);
+      callbackReceived = true;
+      if (!resp || resp.reference !== reference) {
+        restorePayButton();
+        toast("Payment reference could not be verified.");
+        return;
+      }
+      toast("Payment submitted. Waiting for Paystack server confirmation…");
+      pollPaymentConfirmation(b).finally(restorePayButton);
     },
-    onClose: () => { restorePayButton(); toast("Payment window closed — no charge made"); }
-  });
-  handler.openIframe();
+    onClose: () => {
+      restorePayButton();
+      if (!callbackReceived) toast("Payment window closed. Check your booking status before trying again.");
+    }
+  }); handler.openIframe(); }
+  catch (error) {
+    restorePayButton();
+    toast("Could not open Paystack checkout. Please try again.");
+  }
 };
+async function pollPaymentConfirmation(booking) {
+  for (let attempt = 0; attempt < 18; attempt++) {
+    if (attempt) await new Promise((resolve) => window.setTimeout(resolve, 5000));
+    try {
+      const state = await Backend.apiGet("/api/bookings/payment-status?bookingId=" + encodeURIComponent(booking.id));
+      booking.paymentStatus = state.payment_status;
+      booking.payoutStatus = state.payout_status;
+      persist();
+      renderTrack();
+      if (booking.paymentStatus === "confirmed") {
+        toast("Payment verified. Funds will be released after you confirm the job is complete.");
+        return true;
+      }
+    } catch (error) {
+      toast(error.message || "Could not check payment status.");
+      return false;
+    }
+  }
+  toast("Payment is still being verified. Check your booking notifications shortly.");
+  return false;
+}
 async function completeBooking(b, method) {
-  b.status = "paid";
+  b.status = method === "Cash to Artisan" ? "completed" : b.status;
   b.method = method;
   if (S.activeId === b.id) S.activeId = null;
   persist();
@@ -505,12 +551,95 @@ async function completeBooking(b, method) {
   toast(method === "Cash to Artisan" ? "Booked — pay cash after inspection" : "Payment successful — held in escrow");
   show("history");
 }
+document.getElementById("confirmJobCompleteBtn").onclick = (event) => withButtonBusy(event.currentTarget, "Confirming…", async () => {
+  const booking = activeBooking();
+  if (!booking) return;
+  try {
+    const result = await Backend.apiPost("/api/bookings/complete", { bookingId: booking.id });
+    booking.status = "completed";
+    booking.payoutStatus = result.payoutStatus;
+    S.activeId = null;
+    persist();
+    toast("Job completed. The artisan's 90% payout is processing.");
+    show("history");
+  } catch (error) {
+    toast(error.message || "Could not confirm completion.");
+  }
+});
 
 /* ---------- history ---------- */
+function renderNotifications() {
+  const box = document.getElementById("notificationsList");
+  if (!box) return;
+  if (!LIVE_DB || !Auth.googleUid()) {
+    box.innerHTML = '<p class="f12 soft">Sign in to receive booking updates.</p>';
+    return;
+  }
+  if (!APP_NOTIFICATIONS.length) {
+    box.innerHTML = '<p class="f12 soft">No notifications yet. Updates will appear here for both customers and artisans.</p>';
+    return;
+  }
+  box.innerHTML = APP_NOTIFICATIONS.map((notification) => `<button type="button" class="w-full text-left rounded-xl border border-line p-3 ${notification.read_at ? "bg-white" : "bg-trust-tint"}" data-notification-id="${escapeHtml(notification.id)}">
+    <span class="block f13 font-bold">${escapeHtml(notification.message)}</span>
+    <span class="block f11 soft mt-1">${escapeHtml(new Date(notification.created_at).toLocaleString())}${notification.read_at ? "" : " · New"}</span>
+  </button>`).join("");
+  box.querySelectorAll("[data-notification-id]").forEach((button) => {
+    button.onclick = async () => {
+      const item = APP_NOTIFICATIONS.find((n) => String(n.id) === button.dataset.notificationId);
+      if (!item) return;
+      try {
+        await Backend.markNotificationsRead([item.id]);
+        item.read_at = new Date().toISOString();
+        updateNotificationBadge();
+        renderNotifications();
+        if (S.profile && S.profile.role === "artisan") show("home");
+        else if (item.booking_id) {
+          const bookings = await Backend.list();
+          const booking = bookings.find((b) => b.id === item.booking_id);
+          if (booking) {
+            S.bookings = bookings;
+            if (["enroute", "arrived", "working"].includes(booking.status)) S.activeId = booking.id;
+            persist();
+            show(["enroute", "arrived", "working"].includes(booking.status) ? "track" : "history");
+          }
+        }
+      } catch (error) {
+        toast("Could not update this notification.");
+      }
+    };
+  });
+}
+const knownNotificationIds = new Set();
+async function pollNotifications(showNew) {
+  if (!LIVE_DB || !Auth.googleUid()) return;
+  try {
+    const notifications = await Backend.notifications();
+    const fresh = notifications.filter((notification) => !knownNotificationIds.has(String(notification.id)));
+    notifications.forEach((notification) => knownNotificationIds.add(String(notification.id)));
+    APP_NOTIFICATIONS = notifications;
+    updateNotificationBadge();
+    if (S.profile && S.profile.role === "customer") {
+      const bookings = await Backend.list();
+      S.bookings = bookings;
+      persist();
+      if (!document.getElementById("view-track").hidden) renderTrack();
+      if (!document.getElementById("view-home").hidden) renderHomeExtras();
+    } else if (S.profile && S.profile.role === "artisan" && !document.getElementById("view-home").hidden) {
+      renderJobs();
+    }
+    if (showNew) fresh.filter((notification) => !notification.read_at).forEach((notification) => toast(notification.message));
+    if (!document.getElementById("view-history").hidden) renderNotifications();
+  } catch (error) {
+    console.error("[notifications] Could not refresh:", error.message);
+  }
+}
+setInterval(() => pollNotifications(true), 20000);
 async function renderHistory() {
   document.getElementById("backendChip").textContent = LIVE_DB ? "Live Supabase" : "Not connected";
   document.getElementById("histSub").textContent = LIVE_DB ? "Synced jobs" : "Add keys in public/config.js to connect";
   const all = await Backend.list();
+  await pollNotifications(false);
+  renderNotifications();
   const a = all.find(b => b.id === S.activeId && ["dispatched", "enroute", "arrived", "working"].includes(b.status));
   const box = document.getElementById("activeJobCard");
   box.innerHTML = "";
@@ -523,21 +652,20 @@ async function renderHistory() {
     return;
   }
   if (a) {
-    const t = TECHS[a.serviceId] || { name: "ServePoint artisan", phone: "0800349548" };
-    const aname = a.tech || t.name;
+    const aname = a.tech || "Assigned artisan";
     const afirst = String(aname).split(" ")[0];
     const d = document.createElement("div");
     d.className = "bg-ink text-white rounded-2xl shadow-card p-4";
     d.innerHTML = `<div class="flex items-center gap-2"><span class="live-dot"></span>
         <p class="font-display font-bold f15 flex-1">${svc(a.serviceId).name} · ${a.id}</p>
         <span class="font-display font-extrabold">${gh(a.total)}</span></div>
-      <p class="f13 text-white/80 mt-1">${aname} · ETA ${a.etaMin} min · ${a.date}, ${a.slot}</p>
+      <p class="f13 text-white/80 mt-1">${escapeHtml(aname)} · ${a.etaMin ? "ETA " + a.etaMin + " min · " : ""}${escapeHtml(a.date || "")}, ${escapeHtml(a.slot || "")}</p>
       <div class="grid grid-cols-2 gap-2 mt-3">
         <button class="bg-white text-ink font-display font-bold f14 rounded-xl py-3 mh50" data-goto="track">Track ${afirst}</button>
         <a class="bg-trust text-white font-display font-bold f14 rounded-xl py-3 mh50 flex items-center justify-center" data-artisan-contact></a>
       </div>`;
     box.appendChild(d);
-    bindArtisanContact(d.querySelector("[data-artisan-contact]"), a, afirst, t.phone);
+    bindArtisanContact(d.querySelector("[data-artisan-contact]"), a, afirst);
   }
   await renderOpenMine(all);
   const past = all.filter(b => ["paid", "completed", "cancelled"].includes(b.status));
@@ -546,7 +674,7 @@ async function renderHistory() {
   if (!past.length) list.innerHTML = '<p class="f14 text-ink-soft">No completed jobs yet.</p>';
   past.slice(0, 20).forEach(b => {
     const s = svc(b.serviceId) || { name: b.serviceId, tint: "#F1F5F9", color: "#4A5268", icon: "" };
-    const tech = b.tech || (TECHS[b.serviceId] ? TECHS[b.serviceId].name : "ServePoint artisan");
+    const tech = b.tech || "Artisan not assigned";
     const el = document.createElement("div");
     el.className = "bg-white border border-line rounded-2xl shadow-card p-4";
     el.innerHTML = `<div class="flex items-center gap-3">
@@ -559,11 +687,22 @@ async function renderHistory() {
         <button class="rounded-xl border border-line font-bold f13h py-2.5 mh48" data-again="${b.serviceId}">Book Again</button>
         <a class="rounded-xl bg-trust-tint text-trust-deep font-bold f13h py-2.5 mh48 flex items-center justify-center" data-artisan-contact></a>
         ${b.status !== "cancelled" ? '<button class="rounded-xl border border-line font-bold f13h py-2.5 mh48 col-span-2" data-receipt>Print / Save receipt</button>' : ""}
+        ${b.status === "completed" && b.method !== "Cash to Artisan" ? '<button class="rounded-xl border border-line font-bold f13h py-2.5 mh48 col-span-2" data-retry-payout>Check / retry artisan payout</button>' : ""}
       </div>`;
     el.querySelector("[data-again]").onclick = (e) => startBooking(e.currentTarget.dataset.again);
-    bindArtisanContact(el.querySelector("[data-artisan-contact]"), b, "Again", TECHS[b.serviceId] ? TECHS[b.serviceId].phone : "0800349548");
+    bindArtisanContact(el.querySelector("[data-artisan-contact]"), b, "Again");
     const receiptButton = el.querySelector("[data-receipt]");
     if (receiptButton) receiptButton.onclick = () => showServiceReceipt(b);
+    const payoutButton = el.querySelector("[data-retry-payout]");
+    if (payoutButton) payoutButton.onclick = (event) => withButtonBusy(event.currentTarget, "Checking payout…", async () => {
+      try {
+        const result = await Backend.apiPost("/api/bookings/complete", { bookingId: b.id });
+        b.payoutStatus = result.payoutStatus;
+        persist();
+        toast(result.payoutStatus === "paid" ? "Artisan payout is complete." :
+          result.payoutStatus === "processing" ? "Artisan payout is processing." : "Payout status: " + result.payoutStatus);
+      } catch (error) { toast(error.message || "Could not check or retry payout."); }
+    });
     list.appendChild(el);
   });
 }
@@ -673,8 +812,9 @@ async function renderOpenMine(all) {
 async function acceptApplication(app, b) {
   try {
     await Backend.setApplication(app.id, "accepted");
+    b.artisanId = app.artisan_id;
     b.tech = app.artisan_name; b.techRating = Number(app.rating) || 5.0; b.techJobs = Number(app.jobs) || 0;
-    b.status = "enroute"; b.etaMin = 15; b.prog = 0.06; b.offRoute = false; b.step = 1;
+    b.status = "enroute"; b.etaMin = null; b.prog = 0.06; b.offRoute = false; b.step = 1;
     if (S.activeId === b.id || !S.activeId) S.activeId = b.id;
     persist();
     await Backend.save(b);
@@ -904,6 +1044,7 @@ document.getElementById("diagClear").onclick = () => {
 
 /* ---------- services browse + wallet ---------- */
 let svcFilter = "all", svcQuery = "";
+let serviceArtisans = [], serviceArtisansLoaded = false, serviceArtisansLoading = false;
 const SVC_FILTERS = [
   { id: "all", label: "All" },
   { id: "same", label: "Same-day" },
@@ -911,7 +1052,8 @@ const SVC_FILTERS = [
   { id: "under100", label: "Under GH₵100" }
 ];
 function svcPasses(s) {
-  if (svcFilter === "top" && !(TECHS[s.id] && Number(TECHS[s.id].rating) >= 4.8)) return false;
+  const providers = serviceArtisans.filter((artisan) => artisan.trade === s.id);
+  if (svcFilter === "top" && !providers.some((artisan) => Number(artisan.rating) >= 4.8)) return false;
   if (svcFilter === "under100" && !(s.base < 100)) return false;
   if (svcQuery) {
     const q = svcQuery.toLowerCase();
@@ -920,6 +1062,15 @@ function svcPasses(s) {
   return true;
 }
 function renderServices() {
+  if (LIVE_DB && !serviceArtisansLoaded && !serviceArtisansLoading) {
+    serviceArtisansLoading = true;
+    Backend.artisans().then((rows) => {
+      serviceArtisans = rows || [];
+      serviceArtisansLoaded = true;
+      serviceArtisansLoading = false;
+      renderServices();
+    }).catch(() => { serviceArtisansLoading = false; });
+  }
   const chips = document.getElementById("svcChips");
   chips.innerHTML = "";
   SVC_FILTERS.forEach(f => {
@@ -932,15 +1083,15 @@ function renderServices() {
   const grid = document.getElementById("svcGrid");
   grid.innerHTML = "";
   const list = SERVICES.filter(svcPasses);
-  document.getElementById("svcSub").textContent = list.length + " of " + SERVICES.length + " trades · verified pros nearby";
+  document.getElementById("svcSub").textContent = list.length + " of " + SERVICES.length + " trades · artisan availability from live profiles";
   if (!list.length) grid.innerHTML = '<p class="emptyNote f14 soft py-6 spanall">No matches — try "leak" or "wiring".</p>';
   list.forEach(s => {
-    const t = TECHS[s.id];
+    const count = serviceArtisans.filter((artisan) => artisan.trade === s.id).length;
     const b = document.createElement("button");
     b.className = "glasscard p-4 flex flex-col items-start gap-2 text-left";
     b.innerHTML = `<span class="w-12 h-12 rounded-full grid place-items-center ${tintCls(s)}">${svcIcon(s, "w-6 h-6")}</span>
       <span><span class="block font-display font-extrabold f15">${s.name}</span>
-      <span class="block f12 soft">from ${gh(s.base)} · ${t ? t.jobs + " fixes" : "verified pro"}</span></span>
+      <span class="block f12 soft">from ${gh(s.base)} · ${count ? count + (count === 1 ? " artisan" : " artisans") : "No artisans yet"}</span></span>
       <span class="f12 font-bold uptime">Book now →</span>`;
     b.onclick = () => startBooking(s.id);
     grid.appendChild(b);
@@ -1065,6 +1216,16 @@ function renderAccount() {
       <select id="acctArea" class="field rounded-xl p-3 f14 w-full">${areaOptions(p.area || AREAS[0])}</select>
     </div>
     <button id="saveTradeBtn" class="mt-2 w-full btn-dark font-display font-bold f14 rounded-2xl py-3.5 mh52">Save profile</button>
+    <div class="mt-4 border-t border-line pt-4">
+      <p class="font-display font-bold f15">Payout account</p>
+      <p class="f12 soft mt-1">Used to transfer your 90% share after the customer confirms the completed job. Bank details are sent securely to Paystack; ServePoint stores only the Paystack recipient code.</p>
+      <label for="payoutBank" class="block f12 font-bold text-ink-soft mt-3 mb-1">Bank</label>
+      <select id="payoutBank" class="field rounded-xl p-3 f14 w-full"><option value="">Loading banks…</option></select>
+      <label for="payoutAccount" class="block f12 font-bold text-ink-soft mt-3 mb-1">Account number</label>
+      <input id="payoutAccount" class="field rounded-xl p-3 f14 w-full" type="text" inputmode="numeric" autocomplete="off" maxlength="20" placeholder="Enter your account number">
+      <button id="savePayoutBtn" class="mt-3 w-full btn-dark font-display font-bold f14 rounded-2xl py-3.5 mh52">Save payout account</button>
+      <p id="payoutStatus" class="f12 soft mt-2" role="status"></p>
+    </div>
   </div>` : ""}
   <button id="logoutBtn" class="mt-3 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-red-200 text-cancel bg-white">Log out</button>
   <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
@@ -1080,6 +1241,36 @@ function renderAccount() {
         name: details.name,
         trade: document.getElementById("acctTrade").value,
         area: document.getElementById("acctArea").value
+      });
+      const payoutBank = document.getElementById("payoutBank");
+      if (payoutBank) {
+        fetch("/api/paystack/banks").then(async (response) => {
+          const data = await response.json();
+          if (!response.ok) throw new Error(data.error || "Could not load banks");
+          payoutBank.innerHTML = '<option value="">Choose your bank</option>' +
+            (data.banks || []).map((bank) => `<option value="${escapeHtml(bank.code)}">${escapeHtml(bank.name)}</option>`).join("");
+          if (!data.banks || !data.banks.length) throw new Error("No Ghana payout banks are available.");
+        }).catch((error) => {
+          payoutBank.innerHTML = '<option value="">Banks unavailable</option>';
+          const status = document.getElementById("payoutStatus");
+          if (status) status.textContent = error.message;
+        });
+      }
+      const savePayout = document.getElementById("savePayoutBtn");
+      if (savePayout) savePayout.onclick = (event) => withButtonBusy(event.currentTarget, "Saving payout…", async () => {
+        const bankCode = payoutBank.value;
+        const accountNumber = document.getElementById("payoutAccount").value.trim();
+        const status = document.getElementById("payoutStatus");
+        if (!bankCode || !accountNumber) { toast("Choose a bank and enter your account number."); return; }
+        try {
+          await Backend.apiPost("/api/paystack/recipient", { bankCode, accountNumber });
+          document.getElementById("payoutAccount").value = "";
+          status.textContent = "Payout account saved with Paystack.";
+          toast("Payout account saved.");
+        } catch (error) {
+          status.textContent = error.message || "Could not save payout account.";
+          toast(status.textContent);
+        }
       });
       S.profile.phone = details.phone;
       S.profile.phoneStorageError = false;
@@ -1104,6 +1295,8 @@ document.getElementById("privacyBackBtn").onclick = () => show(privacyFrom);
 const aso = document.getElementById("adminSignout");
 if (aso) aso.onclick = () => { Auth.logout(); show("home"); };
 show("home");
+pollNotifications(false);
+window.addEventListener("focus", () => pollNotifications(true));
 try {
   const g = S.homeGeo;
   if (!g || (Date.now() - (g.ts || 0)) > 24 * 3600 * 1000) locateUser({ silent: true });

@@ -47,17 +47,33 @@ Project layout:
       config.js          # PUBLIC keys only (Supabase anon + Paystack public)
     test/
       security.test.js   # npm test — proves the split holds
-    .env.example         # copy to .env, fill in your Groq key
+    .env.example         # copy to .env and configure server-side keys
     package.json / README.md
 
 Setup (3 minutes):
 
   cd fixhub-secure
   cp .env.example .env        # Windows: copy .env.example .env
-  # edit .env and paste your Groq key into GROQ_API_KEY
+  # edit .env and configure the Groq, Supabase, and Paystack server keys
   # edit public/config.js: paste Supabase URL + anon key + Paystack PUBLIC key
   node server.js
   # open http://localhost:8000
+
+Database and payments:
+
+  - After the main Supabase schema creates profiles, bookings, and
+    applications, run the complete fixhub-secure/src/artisan-private-details.sql
+    migration in the Supabase SQL Editor.
+  - Configure SUPABASE_URL, SUPABASE_ANON_KEY,
+    SUPABASE_SERVICE_ROLE_KEY, and PAYSTACK_SECRET_KEY in the server's .env.
+    Never put the service-role key or Paystack secret key in public/config.js.
+  - Set the Paystack webhook URL to
+    https://YOUR_HOST/api/paystack/webhook and configure the same Paystack
+    secret key on the server. Use HTTPS in production.
+  - Artisans receive jobs that match their saved trade. The customer confirms
+    completion before the server initiates the artisan's 90% payout. Payouts
+    also require a configured artisan bank account and sufficient Paystack
+    transfer balance.
 
 
 
@@ -102,5 +118,4 @@ Response headers (every static + API response carries them):
   enforces this) — dynamic colors go through the allowlisted tintCls()
   helper; JS-driven changes (toast, timeline, avatar) use CSSOM property
   sets, which style-src does not block.
-
 

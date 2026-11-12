@@ -32,13 +32,7 @@ const SERVICES = [
   { id: "hvac", name: "HVAC", base: 120, tint: "#EDE9FE", color: "#6D28D9", blurb: "AC install & servicing",
     icon: '<path d="M12 2v20M4 6l16 12M20 6L4 18M12 6l-2-2m2 2l2-2m-2 14l-2 2m2-2l2 2M3.5 9L2 8m1.5 1L2 10m18.5-1L22 8m-1.5 1L22 10M3.5 15L2 16m1.5-1L2 14m18.5 1L22 16m-1.5-1l1.5 2"/>' }
 ];
-const TECHS = {
-  plumbing:   { name: "Emmanuel Mensah", title: "Master Plumber", rating: "4.9", jobs: 142, phone: "+233244123456", wa: "233244123456", from: "Spintex Road, Accra" },
-  electrical: { name: "Ama Serwaa", title: "Certified Electrician", rating: "4.8", jobs: 117, phone: "+233244654321", wa: "233244654321", from: "Osu, Accra" },
-  cleaning:   { name: "Efua Owusu", title: "Cleaning Team Lead", rating: "4.9", jobs: 203, phone: "+233244789012", wa: "233244789012", from: "East Legon, Accra" },
-  carpentry:  { name: "Kwame Boateng", title: "Master Carpenter", rating: "4.7", jobs: 98, phone: "+233244345678", wa: "233244345678", from: "Kaneshie, Accra" },
-  hvac:       { name: "Yaw Adjei", title: "HVAC Specialist", rating: "4.8", jobs: 86, phone: "+233244901234", wa: "233244901234", from: "Tema Comm. 25" }
-};
+let APP_NOTIFICATIONS = [];
 /* Service areas cover all 16 regions of Ghana. AREAS stays flat for the
    fallback cycler and defaults; dropdowns group by region instead. */
 const REGIONS = [
@@ -230,6 +224,29 @@ const Backend = {
     if (!r.ok) throw new Error("Supabase request failed: " + r.status);
     try { return await r.json(); } catch (e) { return null; }
   },
+  async apiPost(path, body) {
+    const token = await Auth.bearer();
+    const headers = this.headers(token);
+    delete headers.apikey;
+    headers["Content-Type"] = "application/json";
+    const response = await fetch(path, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body)
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Server request failed: " + response.status);
+    return result;
+  },
+  async apiGet(path) {
+    const token = await Auth.bearer();
+    const headers = this.headers(token);
+    delete headers.apikey;
+    const response = await fetch(path, { headers });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Server request failed: " + response.status);
+    return result;
+  },
   async list() {
     if (!LIVE_DB) return [];
     try {
@@ -259,9 +276,13 @@ const Backend = {
   },
   async openJobs() {
     if (!LIVE_DB) return [];
+    const artisan = S.profile && S.profile.role === "artisan";
+    const trade = artisan ? String(S.profile.trade || "") : "";
+    if (artisan && !trade) return [];
     try {
-      const rows = await this.sbGet("bookings?select=*&status=eq.open&order=created_at.desc&limit=20");
-      return (rows || []).map(rowToBooking);
+      const filter = artisan ? "&service=eq." + encodeURIComponent(trade) : "";
+      const rows = await this.sbGet("bookings?select=*&status=eq.open" + filter + "&order=created_at.desc&limit=20");
+      return (rows || []).map(rowToBooking).filter((booking) => !artisan || booking.serviceId === trade);
     } catch (e) { return []; }
   },
   async applicants(bookingId) {
@@ -280,7 +301,9 @@ const Backend = {
   },
   async apply(booking) {
     const g = Auth.googleUid();
-    if (!g || !S.profile || S.profile.role !== "artisan") throw 0;
+    if (!g || !S.profile || S.profile.role !== "artisan" || !booking || booking.serviceId !== S.profile.trade || booking.status !== "open") {
+      throw new Error("This request is not open for your trade.");
+    }
     if (!LIVE_DB) throw 0;
     return await this.sbSend("applications", "POST", {
       booking_id: booking.id, artisan_id: g,
@@ -317,13 +340,29 @@ const Backend = {
     const artisanId = applications[0].artisan_id;
     const phone = await this.artisanPhone(artisanId);
     return phone ? { artisanId, phone } : null;
+  },
+  async notifications() {
+    if (!LIVE_DB) return [];
+    return await this.sbGet("notifications?select=id,booking_id,type,message,read_at,created_at&order=created_at.desc&limit=30");
+  },
+  async markNotificationsRead(ids) {
+    if (!LIVE_DB || !ids.length) return;
+    const filter = ids.map((id) => encodeURIComponent(id)).join(",");
+    await this.sbSend("notifications?id=in.(" + filter + ")&read_at=is.null", "PATCH", { read_at: new Date().toISOString() }, "return=minimal");
+  },
+  async assignedJobs() {
+    const artisanId = Auth.googleUid();
+    if (!LIVE_DB || !artisanId || !S.profile || S.profile.role !== "artisan") return [];
+    const rows = await this.sbGet("bookings?select=*&artisan_id=eq." + encodeURIComponent(artisanId) +
+      "&status=in.(enroute,arrived,working)&order=created_at.desc&limit=20");
+    return (rows || []).map(rowToBooking);
   }
 };
 function bookingToRow(b) {
-  return { id: b.id, owner_id: Auth.uid(), customer_id: b.customerId || null, service: b.serviceId, description: b.desc, area: b.area, slot: b.slot, date: b.date, total: b.total, service_amount: b.service, transport_amount: b.transport, discount_amount: b.discount, payment_reference: b.payRef || null, method: b.method || null, status: b.status, tech: b.tech || null, prog: (typeof b.prog === "number" ? b.prog : null), offroute: !!b.offRoute, tech_rating: (b.techRating != null ? b.techRating : null), tech_jobs: (b.techJobs != null ? b.techJobs : null) };
+  return { id: b.id, owner_id: Auth.uid(), customer_id: b.customerId || null, artisan_id: b.artisanId || null, service: b.serviceId, description: b.desc, area: b.area, slot: b.slot, date: b.date, total: b.total, service_amount: b.service, transport_amount: b.transport, discount_amount: b.discount, payment_reference: b.payRef || null, method: b.method || null, status: b.status, tech: b.tech || null, prog: (typeof b.prog === "number" ? b.prog : null), offroute: !!b.offRoute, tech_rating: (b.techRating != null ? b.techRating : null), tech_jobs: (b.techJobs != null ? b.techJobs : null) };
 }
 function rowToBooking(r) {
-  return { id: r.id, customerId: r.customer_id || null, serviceId: r.service, desc: r.description, area: r.area, slot: r.slot, date: r.date, total: Number(r.total), service: r.service_amount == null ? null : Number(r.service_amount), transport: r.transport_amount == null ? null : Number(r.transport_amount), discount: r.discount_amount == null ? null : Number(r.discount_amount), payRef: r.payment_reference || null, method: r.method, status: r.status, tech: r.tech, prog: (r.prog != null ? Number(r.prog) : null), offRoute: !!r.offroute, techRating: (r.tech_rating != null ? Number(r.tech_rating) : null), techJobs: (r.tech_jobs != null ? Number(r.tech_jobs) : null) };
+  return { id: r.id, customerId: r.customer_id || null, artisanId: r.artisan_id || null, serviceId: r.service, desc: r.description, area: r.area, slot: r.slot, date: r.date, total: Number(r.total), service: r.service_amount == null ? null : Number(r.service_amount), transport: r.transport_amount == null ? null : Number(r.transport_amount), discount: r.discount_amount == null ? null : Number(r.discount_amount), payRef: r.payment_reference || null, method: r.method, status: r.status, tech: r.tech, prog: (r.prog != null ? Number(r.prog) : null), offRoute: !!r.offroute, techRating: (r.tech_rating != null ? Number(r.tech_rating) : null), techJobs: (r.tech_jobs != null ? Number(r.tech_jobs) : null) };
 }
 function rowToProfile(r) {
   return { id: r.id, role: r.role, name: r.name, trade: r.trade || null, area: r.area || null, rating: (r.rating != null ? Number(r.rating) : 5.0), jobs: (r.jobs != null ? Number(r.jobs) : 0) };
@@ -543,7 +582,7 @@ async function upgradeProvCounts(grid) {
     });
     grid.querySelectorAll("[data-prov]").forEach(el => {
       const c = n[el.dataset.prov] || 0;
-      if (c > 0) el.textContent = c + (c === 1 ? " provider" : " providers");
+      el.textContent = c > 0 ? c + (c === 1 ? " artisan" : " artisans") : "No artisans yet";
     });
   } catch (e) {}
 }
@@ -664,8 +703,7 @@ async function locateUser(opts) {
 function renderHomeExtras() {
   updateAvatar();
   refreshAreaPill();
-  const nd = document.getElementById("notifDot");
-  if (nd) nd.hidden = !S.bookings.some(b => ["dispatched", "enroute", "arrived", "working"].includes(b.status));
+  updateNotificationBadge();
   const isArtisan = S.profile && S.profile.role === "artisan";
   document.querySelectorAll(".sp-hero, .sp-photo-wrap, .sp-help").forEach(el => { el.hidden = !!isArtisan; });
   document.getElementById("jobsWrap").hidden = !isArtisan;
@@ -678,18 +716,48 @@ function renderHomeExtras() {
   const a = S.bookings.find(b => b.id === S.activeId && ["dispatched", "enroute", "arrived"].includes(b.status));
   document.getElementById("activeBanner").hidden = !a;
   if (a) {
-    const t = TECHS[a.serviceId];
-    document.getElementById("activeBannerText").textContent = a.status === "arrived" ? t.name.split(" ")[0] + " has arrived" : t.name.split(" ")[0] + " is on the way · ETA " + a.etaMin + " min";
+    const who = a.tech || "A matching artisan";
+    document.getElementById("activeBannerText").textContent = a.status === "arrived" ? who + " has arrived" :
+      a.tech ? who + " accepted your request" + (a.etaMin ? " · ETA " + a.etaMin + " min" : "") : "Finding an artisan for your request";
   }
   renderUpcoming();
 }
 async function renderJobs() {
   const box = document.getElementById("jobsList");
+  const assignedBox = document.getElementById("assignedJobsList");
   if (!box) return;
   if (!LIVE_DB) { box.innerHTML = '<div class="glasscard p-4"><p class="font-display font-bold f15">Backend not connected</p><p class="f13 soft mt-1">Open requests appear here once you add your Supabase URL + anon key in public/config.js and reload.</p></div>'; return; }
+  if (assignedBox) assignedBox.innerHTML = '<p class="f13 soft">Loading your accepted requests…</p>';
   box.innerHTML = '<p class="f14 soft">Finding open requests…</p>';
-  let jobs = [];
+  let jobs = [], assigned = [];
   try { jobs = await Backend.openJobs(); } catch (e) { jobs = []; }
+  try { assigned = await Backend.assignedJobs(); } catch (e) { assigned = []; }
+  if (assignedBox) {
+    assignedBox.innerHTML = "";
+    if (!assigned.length) assignedBox.innerHTML = '<p class="f13 soft">No accepted requests yet.</p>';
+    assigned.forEach((job) => {
+      const service = svc(job.serviceId) || { name: job.serviceId };
+      const next = job.status === "enroute" ? "arrived" : job.status === "arrived" ? "working" : null;
+      const action = next === "arrived" ? "Mark arrived" : next === "working" ? "Start work" : "";
+      const card = document.createElement("div");
+      card.className = "glasscard p-4";
+      card.innerHTML = `<p class="font-display font-bold f15">${escapeHtml(service.name)} · ${escapeHtml(job.id)}</p>
+        <p class="f12 soft mt-1">${escapeHtml(job.area || "")} · ${escapeHtml(job.date || "")} · ${escapeHtml(job.status)}</p>
+        ${action ? '<button class="btn-dark mt-2 w-full font-display font-bold f14 rounded-2xl py-3 mh50" data-job-status="' + next + '"></button>' : '<p class="f12 soft mt-2">The customer will confirm completion after you finish.</p>'}`;
+      const button = card.querySelector("[data-job-status]");
+      if (button) {
+        button.textContent = action;
+        button.onclick = (event) => withButtonBusy(event.currentTarget, "Updating…", async () => {
+          try {
+            await Backend.apiPost("/api/bookings/status", { bookingId: job.id, status: next });
+            toast(next === "arrived" ? "Customer notified that you have arrived." : "Customer notified that work has started.");
+            await renderJobs();
+          } catch (e) { toast(e.message || "Could not update this request."); }
+        });
+      }
+      assignedBox.appendChild(card);
+    });
+  }
   box.innerHTML = "";
   if (!jobs.length) box.innerHTML = '<p class="f14 soft glasscard p-4">No open requests right now. New customer jobs appear here — check back soon.</p>';
   jobs.slice(0, 20).forEach(j => {
@@ -860,17 +928,21 @@ function renderUpcoming() {
   if (!target) { wrap.hidden = true; return; }
   wrap.hidden = false;
   const s = svc(target.serviceId) || { name: target.serviceId, tint: "#F1F5F9", color: "#4A5268", icon: "" };
-  const t = TECHS[target.serviceId];
+  const provider = target.tech || "Waiting for a matching artisan";
   box.innerHTML = "";
   const d = document.createElement("div");
   d.className = "glasscard p-4 flex items-center gap-3";
   d.innerHTML = `<span class="w-12 h-12 rounded-full grid place-items-center flex-none ${tintCls(s)}">${svcIcon(s, "w-6 h-6")}</span>
-    <div class="flex-1 min-w-0"><p class="f11 font-bold uptime">${a ? "Arriving " + (target.etaMin || 15) + " min · " + target.slot : (target.date || "") + " · " + (target.slot || "")}</p>
+    <div class="flex-1 min-w-0"><p class="f11 font-bold uptime">${a ? (target.status === "arrived" ? "Artisan arrived" : "Artisan accepted") + " · " + target.slot : (target.date || "") + " · " + (target.slot || "")}</p>
     <p class="font-display font-extrabold f15 truncate">${s.name}</p>
-    <p class="f12 soft truncate">${t ? t.name : (target.tech || "")} · ${target.area || ""}</p></div>
+    <p class="f12 soft truncate">${escapeHtml(provider)} · ${escapeHtml(target.area || "")}</p></div>
     <button class="chipx on flex-none" id="upcomingView">View</button>`;
   box.appendChild(d);
   document.getElementById("upcomingView").onclick = () => show(a ? "track" : "history");
+}
+function updateNotificationBadge() {
+  const nd = document.getElementById("notifDot");
+  if (nd) nd.hidden = !APP_NOTIFICATIONS.some((notification) => !notification.read_at);
 }
 document.getElementById("activeBannerBtn").onclick = () => show("track");
 document.querySelectorAll("[data-start]").forEach(b => { b.onclick = () => startBooking(b.dataset.start); });

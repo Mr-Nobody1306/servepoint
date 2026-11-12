@@ -3,11 +3,12 @@
    Only files under publicDir are ever reachable. Anything else
    (server.js, src/, .env) returns 404 — the key cannot be downloaded.
    Hardened response headers (see README "Response headers"):
-   - CSP without 'unsafe-inline' (markup/JS use classes only; JS-driven
-     style changes go through CSSOM, which the CSP does not block).
+   - CSP without inline script or style elements; a style-attribute-only
+     exception supports Paystack's checkout UI.
    - HSTS (short max-age rollout; raise HSTS_MAX_AGE once HTTPS is stable),
      COOP same-origin-allow-popups (OAuth + Paystack popups need window.opener),
-     COEP credentialless, CORP same-origin.
+     CORP same-origin. COEP is omitted so Paystack's cross-origin checkout
+     iframe can load.
    - No CORS allow-origin header is EVER sent: the API is same-origin only. */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -25,10 +26,11 @@ function contentSecurityPolicy() {
   return "default-src 'self';"
     + " script-src 'self' https://js.paystack.co;"
     + " style-src 'self' https://fonts.googleapis.com https://paystack.com;"
+    + " style-src-attr 'unsafe-inline';"
     + " font-src 'self' https://fonts.gstatic.com;"
     + " img-src 'self' data: blob:;"
     + " media-src 'self' blob:;"
-    + " connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net https://js.paystack.co https://api.paystack.co;"
+    + " connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net https://get.geojs.io https://js.paystack.co https://api.paystack.co;"
     + " frame-src 'self' https://js.paystack.co https://checkout.paystack.com;"
     + " object-src 'none';"
     + " base-uri 'self';"
@@ -42,7 +44,6 @@ function securityHeaders() {
     "X-Frame-Options": "SAMEORIGIN",
     "Referrer-Policy": "no-referrer",
     "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
-    "Cross-Origin-Embedder-Policy": "credentialless",
     "Cross-Origin-Resource-Policy": "same-origin",
     "Content-Security-Policy": contentSecurityPolicy()
   };
