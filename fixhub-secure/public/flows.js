@@ -10,6 +10,29 @@ function ensureLoggedInForBooking() {
   }
   return true;
 }
+function beginButtonBusy(button, label) {
+  if (!button || button.disabled) return () => {};
+  const contents = button.innerHTML;
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.classList.add("is-loading");
+  button.textContent = label;
+  let restored = false;
+  return () => {
+    if (restored) return;
+    restored = true;
+    button.innerHTML = contents;
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.classList.remove("is-loading");
+  };
+}
+async function withButtonBusy(button, label, action) {
+  if (button && button.disabled) return;
+  const restore = beginButtonBusy(button, label);
+  try { return await action(); }
+  finally { restore(); }
+}
 function startBooking(serviceId) {
   if (!ensureLoggedInForBooking()) return;
   draft = { serviceId, desc: "", area: (S.homeArea || AREAS[0]), addr: "", date: new Date().toISOString().slice(0, 10), slot: SLOTS[1], voiceSecs: 0, photo: null, voiceUrl: null };
@@ -93,10 +116,11 @@ function row2(k, v, green) {
   return `<div class="flex justify-between"><span class="text-ink-soft">${k}</span><span class="font-bold ${green ? "text-trust" : ""}">${v}</span></div>`;
 }
 function escapeHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
-document.getElementById("dispatchBtn").onclick = async () => {
+document.getElementById("dispatchBtn").onclick = async (event) => withButtonBusy(event.currentTarget, "Posting request…", async () => {
   if (!ensureLoggedInForBooking()) return;
   if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js, then reload"); return; }
   const p = priceOf(draft.serviceId, S.senior);
+  const savedDraft = draft;
   const t = TECHS[draft.serviceId];
   const g = Auth.googleUid();
   const asOpen = !!(g && S.profile && S.profile.role === "customer");
@@ -114,7 +138,16 @@ document.getElementById("dispatchBtn").onclick = async () => {
   S.activeId = asOpen ? null : b.id;
   S.draft = null; draft = null;
   persist();
-  await Backend.save(b);
+  try { await Backend.save(b); }
+  catch (e) {
+    S.bookings = S.bookings.filter(x => x.id !== b.id);
+    S.activeId = null;
+    S.draft = savedDraft;
+    draft = savedDraft;
+    persist();
+    toast("Could not save your request. Check your connection and try again.");
+    return;
+  }
   if (asOpen) {
     toast("Request posted! Artisans can now apply");
     show("history");
@@ -122,7 +155,7 @@ document.getElementById("dispatchBtn").onclick = async () => {
     toast("Dispatched! " + t.name.split(" ")[0] + " is on the way");
     show("track");
   }
-};
+});
 
 /* ---------- voice note + photo ---------- */
 let recorder = null, recChunks = [], recTimer = null, recSecs = 0;
@@ -210,6 +243,25 @@ const Track = {
   }
 };
 Track.ensure();
+const acceptedArtisanContacts = new Map();
+function acceptedArtisanContact(booking) {
+  if (!booking || !booking.customerId) return Promise.resolve(null);
+  if (!acceptedArtisanContacts.has(booking.id)) {
+    const request = Backend.acceptedArtisanContact(booking.id).then((contact) => {
+      if (!contact) acceptedArtisanContacts.delete(booking.id);
+      return contact;
+    }).catch((error) => {
+      acceptedArtisanContacts.delete(booking.id);
+      throw error;
+    });
+    acceptedArtisanContacts.set(booking.id, request);
+  }
+  return acceptedArtisanContacts.get(booking.id);
+}
+function whatsappPhone(phone) {
+  const digits = String(phone || "").replace(/\D/g, "");
+  return digits.startsWith("0") ? "233" + digits.slice(1) : digits;
+}
 function renderTrack() {
   const b = activeBooking();
   document.getElementById("trackEmpty").hidden = !!b;
@@ -254,9 +306,24 @@ function renderTrack() {
   document.getElementById("techTitle").textContent = b.tech && !TECHS[b.serviceId] ? "Accepted artisan" : t.title;
   document.getElementById("techRating").textContent = rating;
   document.getElementById("techJobs").textContent = jobs;
-  document.getElementById("callTechBtn").href = "tel:" + t.phone;
-  document.getElementById("callTechBtn").innerHTML = document.getElementById("callTechBtn").innerHTML.replace(/Call .*Now/, "Call " + first + " Now");
-  document.getElementById("waTechBtn").href = "https://wa.me/" + t.wa + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
+  const callBtn = document.getElementById("callTechBtn");
+  const waBtn = document.getElementById("waTechBtn");
+  callBtn.textContent = b.customerId ? "Loading artisan contact…" : "Call " + first + " Now";
+  callBtn.removeAttribute("href");
+  waBtn.hidden = !!b.customerId;
+  if (!b.customerId) {
+    callBtn.href = "tel:" + t.phone;
+    waBtn.href = "https://wa.me/" + t.wa + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
+  } else {
+    acceptedArtisanContact(b).then((contact) => {
+      if (S.activeId !== b.id) return;
+      if (!contact) { callBtn.textContent = "Artisan contact unavailable"; return; }
+      callBtn.href = "tel:" + contact.phone;
+      callBtn.textContent = "Call " + first + " Now";
+      waBtn.hidden = false;
+      waBtn.href = "https://wa.me/" + whatsappPhone(contact.phone) + "?text=" + encodeURIComponent("Hello " + first + ", this is about my ServePoint booking " + b.id);
+    }).catch(() => { if (S.activeId === b.id) callBtn.textContent = "Could not load artisan contact"; });
+  }
   const idx = b.status === "dispatched" ? 1 : b.status === "enroute" ? 1 : b.status === "arrived" ? 2 : 3;
   const box = document.getElementById("tlSteps");
   box.innerHTML = "";
@@ -293,20 +360,46 @@ function renderTrack() {
     if (mm) mm.textContent = arrived ? "Arrived" : "about " + b.etaMin + " min";
   } catch (e) {}
 }
+function bindArtisanContact(link, booking, name, fallbackPhone) {
+  if (!booking.customerId) {
+    link.href = "tel:" + fallbackPhone;
+    link.textContent = "Call " + name;
+    return;
+  }
+  link.removeAttribute("href");
+  link.textContent = "Loading artisan contact…";
+  acceptedArtisanContact(booking).then((contact) => {
+    if (!link.isConnected) return;
+    if (!contact) { link.textContent = "Artisan contact unavailable"; return; }
+    link.href = "tel:" + contact.phone;
+    link.textContent = "Call " + name;
+  }).catch(() => {
+    if (link.isConnected) link.textContent = "Could not load artisan contact";
+  });
+}
 document.getElementById("refreshEtaBtn").onclick = () => { Track.tick(true); toast("Live location refreshed"); };
 document.getElementById("payNowBtn").onclick = () => show("pay");
 document.getElementById("cancelBtn").onclick = () => { document.getElementById("cancelDrawer").hidden = false; };
-document.getElementById("confirmCancelBtn").onclick = async () => {
+document.getElementById("confirmCancelBtn").onclick = async (event) => withButtonBusy(event.currentTarget, "Cancelling…", async () => {
   const b = activeBooking();
   document.getElementById("cancelDrawer").hidden = true;
   if (!b) return;
+  const previousStatus = b.status;
+  const previousActiveId = S.activeId;
   b.status = "cancelled";
   S.activeId = null;
   persist();
-  await Backend.save(b);
+  try { await Backend.save(b); }
+  catch (e) {
+    b.status = previousStatus;
+    S.activeId = previousActiveId;
+    persist();
+    toast("Could not sync the cancellation. Check your connection and try again.");
+    return;
+  }
   toast("Booking cancelled — free of charge");
   show("history");
-};
+});
 document.getElementById("reschedBtn").onclick = () => {
   document.getElementById("schedDrawer").hidden = false;
   const r = document.getElementById("reschedSlots");
@@ -319,18 +412,24 @@ document.getElementById("reschedBtn").onclick = () => {
     r.appendChild(x);
   });
 };
-document.getElementById("saveReschedBtn").onclick = async () => {
+document.getElementById("saveReschedBtn").onclick = async (event) => withButtonBusy(event.currentTarget, "Saving time…", async () => {
   const b = activeBooking();
   if (!b) return;
   const d = document.getElementById("reschedDate").value;
   const sl = document.getElementById("reschedSlots").dataset.pick;
   if (!d || !sl) { toast("Pick a day and a time slot"); return; }
+  const previousDate = b.date, previousSlot = b.slot;
   b.date = d; b.slot = sl;
   persist();
-  await Backend.save(b);
+  try { await Backend.save(b); }
+  catch (e) {
+    b.date = previousDate; b.slot = previousSlot; persist();
+    toast("Could not save the new time. Check your connection and try again.");
+    return;
+  }
   document.getElementById("schedDrawer").hidden = true;
   toast("Rescheduled to " + d + ", " + sl);
-};
+});
 
 /* ---------- payment ---------- */
 function payMethod() {
@@ -357,11 +456,14 @@ function updatePayBtn() {
     ? "Confirm — I'll pay " + gh(b ? b.total : 0) + " in cash"
     : "Pay " + gh(b ? b.total : 0) + " with " + short;
 }
-document.getElementById("payBtn").onclick = () => {
+document.getElementById("payBtn").onclick = async (event) => {
   const b = S.bookings.find(x => x.id === S.activeId);
   if (!b) return;
   const m = payMethod();
-  if (m === "Cash to Artisan") { completeBooking(b, m); return; }
+  if (m === "Cash to Artisan") {
+    await withButtonBusy(event.currentTarget, "Saving booking…", () => completeBooking(b, m));
+    return;
+  }
   const paystackReady = typeof window !== "undefined" && !!window.PaystackPop && !!(CFG.paystackKey || "").trim() && String(CFG.paystackKey).indexOf("PASTE") !== 0 && String(CFG.paystackKey).indexOf("YOUR_") !== 0;
   if (!paystackReady) { toast("Payment not connected yet — add your Paystack public key in public/config.js, then reload"); return; }
   const session = Auth.load() || {};
@@ -369,6 +471,7 @@ document.getElementById("payBtn").onclick = () => {
   const amountGhs = Number(b.total);
   const amountPesewas = Math.round(amountGhs * 100);
   if (!Number.isFinite(amountPesewas) || amountPesewas < 1) { toast("Invalid payment amount — please contact support"); return; }
+  const restorePayButton = beginButtonBusy(event.currentTarget, "Waiting for payment…");
   const handler = window.PaystackPop.setup({
     key: String(CFG.paystackKey).trim(),
     email,
@@ -379,9 +482,9 @@ document.getElementById("payBtn").onclick = () => {
     channels: ["card", "bank", "mobile_money"],
     callback: (resp) => {
       try { b.payRef = resp && resp.reference ? resp.reference : null; } catch (e) {}
-      completeBooking(b, m);
+      completeBooking(b, m).finally(restorePayButton);
     },
-    onClose: () => toast("Payment window closed — no charge made")
+    onClose: () => { restorePayButton(); toast("Payment window closed — no charge made"); }
   });
   handler.openIframe();
 };
@@ -390,7 +493,15 @@ async function completeBooking(b, method) {
   b.method = method;
   if (S.activeId === b.id) S.activeId = null;
   persist();
-  await Backend.save(b);
+  try {
+    await Backend.save(b);
+  } catch (e) {
+    toast(method === "Cash to Artisan"
+      ? "Booking could not sync to the database. Check your connection and try again."
+      : "Payment was received, but the booking could not sync. Check your connection and contact support.");
+    show("history");
+    return;
+  }
   toast(method === "Cash to Artisan" ? "Booked — pay cash after inspection" : "Payment successful — held in escrow");
   show("history");
 }
@@ -423,9 +534,10 @@ async function renderHistory() {
       <p class="f13 text-white/80 mt-1">${aname} · ETA ${a.etaMin} min · ${a.date}, ${a.slot}</p>
       <div class="grid grid-cols-2 gap-2 mt-3">
         <button class="bg-white text-ink font-display font-bold f14 rounded-xl py-3 mh50" data-goto="track">Track ${afirst}</button>
-        <a href="tel:${t.phone}" class="bg-trust text-white font-display font-bold f14 rounded-xl py-3 mh50 flex items-center justify-center">Call ${afirst}</a>
+        <a class="bg-trust text-white font-display font-bold f14 rounded-xl py-3 mh50 flex items-center justify-center" data-artisan-contact></a>
       </div>`;
     box.appendChild(d);
+    bindArtisanContact(d.querySelector("[data-artisan-contact]"), a, afirst, t.phone);
   }
   await renderOpenMine(all);
   const past = all.filter(b => ["paid", "completed", "cancelled"].includes(b.status));
@@ -445,11 +557,75 @@ async function renderHistory() {
         <span class="font-display font-extrabold f15">${gh(b.total || 0)}</span></div>
       <div class="grid grid-cols-2 gap-2 mt-3">
         <button class="rounded-xl border border-line font-bold f13h py-2.5 mh48" data-again="${b.serviceId}">Book Again</button>
-        <a href="tel:${TECHS[b.serviceId] ? TECHS[b.serviceId].phone : "0800349548"}" class="rounded-xl bg-trust-tint text-trust-deep font-bold f13h py-2.5 mh48 flex items-center justify-center">Call Again</a>
+        <a class="rounded-xl bg-trust-tint text-trust-deep font-bold f13h py-2.5 mh48 flex items-center justify-center" data-artisan-contact></a>
+        ${b.status !== "cancelled" ? '<button class="rounded-xl border border-line font-bold f13h py-2.5 mh48 col-span-2" data-receipt>Print / Save receipt</button>' : ""}
       </div>`;
     el.querySelector("[data-again]").onclick = (e) => startBooking(e.currentTarget.dataset.again);
+    bindArtisanContact(el.querySelector("[data-artisan-contact]"), b, "Again", TECHS[b.serviceId] ? TECHS[b.serviceId].phone : "0800349548");
+    const receiptButton = el.querySelector("[data-receipt]");
+    if (receiptButton) receiptButton.onclick = () => showServiceReceipt(b);
     list.appendChild(el);
   });
+}
+function serviceReceiptMarkup(booking) {
+  const service = svc(booking.serviceId);
+  const name = service ? service.name : booking.serviceId;
+  const fee = Number.isFinite(booking.service) ? booking.service : (service ? service.base : 0);
+  const transport = Number.isFinite(booking.transport) ? booking.transport : Math.max(0, Number(booking.total) - fee + (Number(booking.discount) || 0));
+  const discount = Number(booking.discount) || 0;
+  const paymentStatus = booking.method === "Cash to Artisan"
+    ? "Cash arranged with artisan"
+    : booking.status === "completed" ? "Service completed" : "Payment confirmed";
+  return `<div class="receipt-brand"><strong>ServePoint</strong><span>Service receipt</span></div>
+    <p class="receipt-caption">Keep this receipt for your records.</p>
+    <div class="receipt-facts">
+      <div><span>Receipt / booking</span><strong>${escapeHtml(booking.payRef || booking.id)}</strong></div>
+      <div><span>Service</span><strong>${escapeHtml(name)}</strong></div>
+      <div><span>Artisan</span><strong>${escapeHtml(booking.tech || "To be assigned")}</strong></div>
+      <div><span>Service date</span><strong>${escapeHtml(booking.date || "—")}</strong></div>
+      <div><span>Payment method</span><strong>${escapeHtml(booking.method || "—")}</strong></div>
+      <div><span>Status</span><strong>${paymentStatus}</strong></div>
+    </div>
+    <div class="receipt-line"><span>Service fee</span><strong>${gh(fee)}</strong></div>
+    <div class="receipt-line"><span>Transportation</span><strong>${gh(transport)}</strong></div>
+    ${discount ? `<div class="receipt-line"><span>Discount</span><strong>−${gh(discount)}</strong></div>` : ""}
+    <div class="receipt-total"><span>Total</span><strong>${gh(booking.total)}</strong></div>
+    <p class="receipt-footer">Thank you for choosing ServePoint.</p>`;
+}
+function showServiceReceipt(booking) {
+  const previous = document.getElementById("receiptOverlay");
+  if (previous) previous.remove();
+  const overlay = document.createElement("section");
+  overlay.id = "receiptOverlay";
+  overlay.className = "receipt-overlay";
+  overlay.setAttribute("role", "dialog");
+  overlay.setAttribute("aria-modal", "true");
+  overlay.setAttribute("aria-label", "Service receipt");
+  overlay.innerHTML = `<div class="receipt-dialog">
+    <div class="receipt-heading"><h2 class="font-display font-extrabold f18">Your receipt</h2><button type="button" class="receipt-close" data-receipt-close aria-label="Close receipt">Close</button></div>
+    <div class="receipt-paper" id="receiptPaper">${serviceReceiptMarkup(booking)}</div>
+    <button type="button" class="btn-dark mt-3 w-full font-display font-bold f14 rounded-2xl py-3.5 mh52" data-print-receipt>Print / Save PDF</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  overlay.querySelector("[data-receipt-close]").onclick = () => overlay.remove();
+  overlay.addEventListener("click", (event) => { if (event.target === overlay) overlay.remove(); });
+  overlay.querySelector("[data-print-receipt]").onclick = (event) => {
+    const restore = beginButtonBusy(event.currentTarget, "Opening print dialog…");
+    document.body.classList.add("printing-receipt");
+    let timeout;
+    const finish = () => {
+      window.removeEventListener("afterprint", finish);
+      window.clearTimeout(timeout);
+      document.body.classList.remove("printing-receipt");
+      restore();
+    };
+    window.addEventListener("afterprint", finish);
+    timeout = window.setTimeout(finish, 120000);
+    window.setTimeout(() => {
+      try { window.print(); }
+      catch (e) { finish(); toast("Could not open printing — try your browser menu"); }
+    }, 50);
+  };
 }
 /* ---------- open requests: artisans apply, customer picks ---------- */
 async function renderOpenMine(all) {
@@ -488,8 +664,8 @@ async function renderOpenMine(all) {
         <span class="block f12 soft">${escapeHtml(app.trade || "General")} · ★ ${r ? r.toFixed(1) : "new"}${app.jobs ? " (" + app.jobs + " fixes)" : ""} · applied</span></span>
         <button class="f12 font-bold text-white rounded-full px-3 py-2 mh44 acceptbtn" data-act="accept">Accept</button>
         <button class="f12 font-bold rounded-full px-3 py-2 mh44 border border-line" data-act="decline">Pass</button>`;
-      row.querySelector('[data-act="accept"]').onclick = () => acceptApplication(app, b);
-      row.querySelector('[data-act="decline"]').onclick = () => declineApplication(app);
+      row.querySelector('[data-act="accept"]').onclick = (event) => withButtonBusy(event.currentTarget, "Accepting…", () => acceptApplication(app, b));
+      row.querySelector('[data-act="decline"]').onclick = (event) => withButtonBusy(event.currentTarget, "Passing…", () => declineApplication(app));
       list.appendChild(row);
     });
   }
@@ -816,7 +992,7 @@ function renderAccount() {
         <div class="mt-3">
           <label for="acctPhone" class="block f12 font-bold text-ink-soft mb-1">Contact phone</label>
           <input id="acctPhone" class="field rounded-xl p-3 f14 w-full" type="tel" maxlength="24" autocomplete="tel" placeholder="e.g. 024 123 4567" aria-describedby="acctPhoneHelp" required>
-          <p id="acctPhoneHelp" class="f11 soft mt-1">Used for your account contact and kept private.</p>
+          <p id="acctPhoneHelp" class="f11 soft mt-1">Kept private except to the customer who accepts your application.</p>
         </div>
         <div class="mt-3">
           <label for="acctTrade" class="block f12 font-bold text-ink-soft mb-1">Your trade</label>
@@ -840,7 +1016,7 @@ function renderAccount() {
     box.querySelectorAll(".easyTBtn").forEach(b => { b.onclick = () => toggleSenior(); });
     applySenior();
     const gb = document.getElementById("googleBtn");
-    if (gb) gb.onclick = () => {
+    if (gb) gb.onclick = (event) => {
       let details = null;
       if (acctRole === "artisan") {
         details = artisanDetails(document.getElementById("acctName").value, document.getElementById("acctPhone").value);
@@ -855,7 +1031,7 @@ function renderAccount() {
           area: acctRole === "artisan" ? document.getElementById("acctArea").value : null
         }));
       } catch (e) {}
-      Auth.loginWithGoogle();
+      Auth.loginWithGoogle(event.currentTarget);
     };
     return;
   }
@@ -869,6 +1045,7 @@ function renderAccount() {
     <span class="${p.role === "artisan" ? "greenpill" : "chipx on rolechip-cust"} flex-none">${p.role === "artisan" ? "Artisan" : "Customer"}</span>
   </div>
   ${p.role === "artisan" ? `<div class="glasscard p-4 mt-3">
+    ${p.phoneStorageError ? '<p class="f12 text-cancel mb-2" role="status">Phone details are not synced yet. Run the artisan database migration, then save your profile.</p>' : ""}
     <p class="font-display font-bold f15">My artisan profile</p>
     <div class="mt-3">
       <label for="acctName" class="block f12 font-bold text-ink-soft mb-1">Full name</label>
@@ -877,7 +1054,7 @@ function renderAccount() {
     <div class="mt-3">
       <label for="acctPhone" class="block f12 font-bold text-ink-soft mb-1">Contact phone</label>
       <input id="acctPhone" class="field rounded-xl p-3 f14 w-full" type="tel" maxlength="24" autocomplete="tel" value="${escapeHtml(p.phone || "")}" placeholder="Contact phone number">
-      <p class="f11 soft mt-1">Kept private in your account.</p>
+      <p class="f11 soft mt-1">Shown to a customer only after they accept you for a booking.</p>
     </div>
     <div class="mt-3">
       <label for="acctTrade" class="block f12 font-bold text-ink-soft mb-1">Your trade</label>
@@ -893,22 +1070,24 @@ function renderAccount() {
   <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
   <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="privacy">Privacy & data safety</button>`;
   const st = document.getElementById("saveTradeBtn");
-  if (st) st.onclick = async () => {
-    const details = artisanDetails(document.getElementById("acctName").value, document.getElementById("acctPhone").value);
+  if (st) st.onclick = async (event) => withButtonBusy(event.currentTarget, "Saving profile…", async () => {
+    const enteredPhone = document.getElementById("acctPhone").value.trim();
+    const details = artisanDetails(document.getElementById("acctName").value, enteredPhone || p.phone || "");
     if (!details) return;
     try {
+      await Backend.saveArtisanPhone(details.phone);
       await Backend.saveProfile({
         name: details.name,
         trade: document.getElementById("acctTrade").value,
         area: document.getElementById("acctArea").value
       });
-      await Backend.saveArtisanPhone(details.phone);
       S.profile.phone = details.phone;
+      S.profile.phoneStorageError = false;
       persist();
       renderAccount();
       toast("Profile updated");
     } catch (e) { toast("Could not save — check your connection"); }
-  };
+  });
   document.getElementById("logoutBtn").onclick = () => Auth.logout();
   box.querySelectorAll(".easyTBtn").forEach(b => { b.onclick = () => toggleSenior(); });
   applySenior();

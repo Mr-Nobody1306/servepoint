@@ -92,6 +92,38 @@ describe("currency and artisan profile behavior", function () {
     assert.match(schema, /with check \(artisan_id = auth\.uid\(\)\)/);
     assert.match(schema, /on conflict \(artisan_id\) do nothing/);
   });
+  it("only lets the customer with an accepted application read an artisan phone", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    const schema = read("src/artisan-private-details.sql");
+    assert.match(app, /acceptedArtisanContact\(bookingId\)/);
+    assert.match(app, /status=eq\.accepted/);
+    assert.match(schema, /artisan_private_details_accepted_customer_select/);
+    assert.match(schema, /a\.status = 'accepted'/);
+    assert.match(schema, /b\.customer_id = auth\.uid\(\)/);
+    assert.match(flows, /digits\.startsWith\("0"\) \? "233"/);
+  });
+  it("persists booking totals and payment references for receipts", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    const schema = read("src/artisan-private-details.sql");
+    assert.match(app, /service_amount: b\.service/);
+    assert.match(app, /payment_reference: b\.payRef/);
+    assert.match(schema, /add column if not exists payment_reference text/);
+    assert.match(flows, /Print \/ Save receipt/);
+    assert.match(flows, /window\.print\(\)/);
+    assert.match(flows, /data-receipt/);
+  });
+  it("shows a busy state during key database actions", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    const styles = read("public/styles.css");
+    assert.match(flows, /function withButtonBusy/);
+    assert.match(flows, /"Posting request…"/);
+    assert.match(flows, /"Saving profile…"/);
+    assert.match(app, /"Sending application…"/);
+    assert.match(styles, /\.is-loading/);
+  });
 });
 describe("hardened response headers", function () {
   it("sends every required header and never sends CORS allowlists", function () {

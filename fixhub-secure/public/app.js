@@ -120,12 +120,13 @@ const Auth = {
     this.persist(n);
     return n;
   },
-  loginWithGoogle() {
+  loginWithGoogle(button) {
     if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in public/config.js, then reload"); return; }
     const redirect = this.topUrl() + "?oauth=done";
     const url = CFG.supabaseUrl + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(redirect);
     const w = window.open(url, "fixhub_login", "width=480,height=680");
     if (!w) { toast("Allow popups to log in with Google"); return; }
+    const restoreButton = typeof beginButtonBusy === "function" ? beginButtonBusy(button, "Waiting for Google…") : function () {};
     toast("Finish Google login in the new tab…");
     let tries = 0;
     const timer = setInterval(async () => {
@@ -135,13 +136,25 @@ const Auth = {
         const s = raw ? JSON.parse(raw) : null;
         if (s && s.access && s.provider === "google" && s.uid) {
           clearInterval(timer);
+          restoreButton();
           this.mem = s;
-          await ensureProfile();
-          toast("Welcome" + (S.profile && S.profile.name ? ", " + String(S.profile.name).split(" ")[0] : "") + "!");
+          const profile = await ensureProfile();
+          if (!profile) {
+            toast("Signed in, but your profile could not load. Check the database setup and try again.");
+            show("account");
+            return;
+          }
+          toast(profile.phoneStorageError
+            ? "Welcome — your profile loaded, but phone details could not sync. Check the database migration."
+            : "Welcome" + (profile.name ? ", " + String(profile.name).split(" ")[0] : "") + "!");
           show("account");
         }
       } catch (e) {}
-      if (tries > 120) clearInterval(timer);
+      if (tries > 120) {
+        clearInterval(timer);
+        restoreButton();
+        toast("Google sign-in timed out — please try again");
+      }
     }, 1500);
   },
   logout() {
@@ -214,7 +227,7 @@ const Backend = {
     const headers = Object.assign(this.headers(token), { "Content-Type": "application/json" });
     if (prefer) headers.Prefer = prefer;
     const r = await fetch(CFG.supabaseUrl + "/rest/v1/" + path, { method, headers, body: body ? JSON.stringify(body) : undefined });
-    if (!r.ok) throw 0;
+    if (!r.ok) throw new Error("Supabase request failed: " + r.status);
     try { return await r.json(); } catch (e) { return null; }
   },
   async list() {
@@ -235,14 +248,13 @@ const Backend = {
     S.bookings = [b].concat(S.bookings.filter(x => x.id !== b.id));
     persist();
     if (!LIVE_DB) return true;
-    try {
-      const token = await Auth.bearer();
-      await fetch(CFG.supabaseUrl + "/rest/v1/bookings", {
-        method: "POST",
-        headers: Object.assign(this.headers(token), { "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }),
-        body: JSON.stringify(bookingToRow(b))
-      });
-    } catch (e) {}
+    const token = await Auth.bearer();
+    const r = await fetch(CFG.supabaseUrl + "/rest/v1/bookings", {
+      method: "POST",
+      headers: Object.assign(this.headers(token), { "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }),
+      body: JSON.stringify(bookingToRow(b))
+    });
+    if (!r.ok) throw new Error("Could not save booking: " + r.status);
     return true;
   },
   async openJobs() {
@@ -284,7 +296,8 @@ const Backend = {
   async saveProfile(patch) {
     const g = Auth.googleUid();
     if (!g) throw 0;
-    await this.sbSend("profiles?id=eq." + encodeURIComponent(g), "PATCH", patch);
+    const rows = await this.sbSend("profiles?id=eq." + encodeURIComponent(g), "PATCH", patch, "return=representation");
+    if (!rows || !rows.length) throw new Error("No profile was updated");
     S.profile = Object.assign({}, S.profile, patch);
     persist();
     return S.profile;
@@ -297,13 +310,20 @@ const Backend = {
     const artisanId = Auth.googleUid();
     if (!artisanId) throw new Error("Sign in as an artisan to save contact details");
     await this.sbSend("artisan_private_details", "POST", { artisan_id: artisanId, phone }, "resolution=merge-duplicates");
+  },
+  async acceptedArtisanContact(bookingId) {
+    const applications = await this.sbGet("applications?select=artisan_id&booking_id=eq." + encodeURIComponent(bookingId) + "&status=eq.accepted&limit=1");
+    if (!applications || !applications[0]) return null;
+    const artisanId = applications[0].artisan_id;
+    const phone = await this.artisanPhone(artisanId);
+    return phone ? { artisanId, phone } : null;
   }
 };
 function bookingToRow(b) {
-  return { id: b.id, owner_id: Auth.uid(), customer_id: b.customerId || null, service: b.serviceId, description: b.desc, area: b.area, slot: b.slot, date: b.date, total: b.total, method: b.method || null, status: b.status, tech: b.tech || null, prog: (typeof b.prog === "number" ? b.prog : null), offroute: !!b.offRoute, tech_rating: (b.techRating != null ? b.techRating : null), tech_jobs: (b.techJobs != null ? b.techJobs : null) };
+  return { id: b.id, owner_id: Auth.uid(), customer_id: b.customerId || null, service: b.serviceId, description: b.desc, area: b.area, slot: b.slot, date: b.date, total: b.total, service_amount: b.service, transport_amount: b.transport, discount_amount: b.discount, payment_reference: b.payRef || null, method: b.method || null, status: b.status, tech: b.tech || null, prog: (typeof b.prog === "number" ? b.prog : null), offroute: !!b.offRoute, tech_rating: (b.techRating != null ? b.techRating : null), tech_jobs: (b.techJobs != null ? b.techJobs : null) };
 }
 function rowToBooking(r) {
-  return { id: r.id, customerId: r.customer_id || null, serviceId: r.service, desc: r.description, area: r.area, slot: r.slot, date: r.date, total: r.total, method: r.method, status: r.status, tech: r.tech, prog: (r.prog != null ? Number(r.prog) : null), offRoute: !!r.offroute, techRating: (r.tech_rating != null ? Number(r.tech_rating) : null), techJobs: (r.tech_jobs != null ? Number(r.tech_jobs) : null) };
+  return { id: r.id, customerId: r.customer_id || null, serviceId: r.service, desc: r.description, area: r.area, slot: r.slot, date: r.date, total: Number(r.total), service: r.service_amount == null ? null : Number(r.service_amount), transport: r.transport_amount == null ? null : Number(r.transport_amount), discount: r.discount_amount == null ? null : Number(r.discount_amount), payRef: r.payment_reference || null, method: r.method, status: r.status, tech: r.tech, prog: (r.prog != null ? Number(r.prog) : null), offRoute: !!r.offroute, techRating: (r.tech_rating != null ? Number(r.tech_rating) : null), techJobs: (r.tech_jobs != null ? Number(r.tech_jobs) : null) };
 }
 function rowToProfile(r) {
   return { id: r.id, role: r.role, name: r.name, trade: r.trade || null, area: r.area || null, rating: (r.rating != null ? Number(r.rating) : 5.0), jobs: (r.jobs != null ? Number(r.jobs) : 0) };
@@ -323,10 +343,15 @@ async function ensureProfile() {
     if (rows && rows[0]) {
       S.profile = rowToProfile(rows[0]);
       if (S.profile.role === "artisan") {
-        S.profile.phone = await Backend.artisanPhone(me.uid);
-        if (!S.profile.phone && me.artisanPhone) {
-          await Backend.saveArtisanPhone(me.artisanPhone);
-          S.profile.phone = me.artisanPhone;
+        try {
+          S.profile.phone = await Backend.artisanPhone(me.uid);
+          if (!S.profile.phone && me.artisanPhone) {
+            await Backend.saveArtisanPhone(me.artisanPhone);
+            S.profile.phone = me.artisanPhone;
+          }
+        } catch (e) {
+          S.profile.phone = me.artisanPhone || null;
+          S.profile.phoneStorageError = true;
         }
       }
       persist();
@@ -350,10 +375,14 @@ async function ensureProfile() {
       body: JSON.stringify(body)
     });
     if (!w.ok) throw 0;
-    if (role === "artisan" && pending && pending.phone) await Backend.saveArtisanPhone(pending.phone);
-    S.profile = { id: me.uid, role, name: body.name, phone: role === "artisan" ? pending.phone : null, trade: body.trade, area: body.area, rating: 5.0, jobs: 0 };
+    let phoneSaved = role !== "artisan" || !pending || !pending.phone;
+    if (role === "artisan" && pending && pending.phone) {
+      try { await Backend.saveArtisanPhone(pending.phone); phoneSaved = true; }
+      catch (e) { phoneSaved = false; }
+    }
+    S.profile = { id: me.uid, role, name: body.name, phone: role === "artisan" && pending ? pending.phone : null, phoneStorageError: !phoneSaved, trade: body.trade, area: body.area, rating: 5.0, jobs: 0 };
     persist();
-    try { localStorage.removeItem("fixhub_pending_role"); } catch (e) {}
+    if (phoneSaved) { try { localStorage.removeItem("fixhub_pending_role"); } catch (e) {} }
     try { updateAvatar(); } catch (e) {}
     return S.profile;
   } catch (e) { return null; }
@@ -674,7 +703,7 @@ async function renderJobs() {
       <span class="font-display font-extrabold f15">${gh(j.total || 0)}</span></div>
       ${j.desc ? `<p class="f13 soft mt-2">“${escapeHtml(j.desc)}”</p>` : ""}
       <button class="btn-dark mt-2 w-full font-display font-bold f14 rounded-2xl py-3 mh50">Apply for this job</button>`;
-    el.querySelector("button").onclick = () => applyForJob(j);
+    el.querySelector("button").onclick = (event) => withButtonBusy(event.currentTarget, "Sending application…", () => applyForJob(j));
     box.appendChild(el);
   });
 }
@@ -780,8 +809,8 @@ async function renderAdmin() {
           </span></div>
         </div>`;
       }).join("")}</div></div>`;
-    content.querySelectorAll("[data-app-ok]").forEach(b => { b.onclick = () => approveApplication(b.dataset.appOk); });
-    content.querySelectorAll("[data-app-no]").forEach(b => { b.onclick = () => suspendApplication(b.dataset.appNo); });
+    content.querySelectorAll("[data-app-ok]").forEach(b => { b.onclick = (event) => withButtonBusy(event.currentTarget, "Approving…", () => approveApplication(b.dataset.appOk)); });
+    content.querySelectorAll("[data-app-no]").forEach(b => { b.onclick = (event) => withButtonBusy(event.currentTarget, "Updating…", () => suspendApplication(b.dataset.appNo)); });
   } else if (adminTab === "providers") {
     content.innerHTML = artisans.length ? `<div class="sp-card sp-table-card">
       <div class="sp-table-head"><div><p class="sp-card-title">Providers</p>
