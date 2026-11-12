@@ -63,20 +63,43 @@ describe("backend isolation", function () {
     assert.ok(!/gsk_[A-Za-z0-9]|sk-[A-Za-z0-9]|eyJ[A-Za-z0-9]/.test(body), "public/config.js must not contain a real key");
   });
 });
+describe("currency and artisan profile behavior", function () {
+  it("shows cedi amounts and sends Paystack pesewas", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    assert.match(app, /function gh\(n\) \{ return "GH₵ " \+ Number\(n\)\.toFixed\(2\); \}/);
+    assert.match(flows, /const amountPesewas = Math\.round\(amountGhs \* 100\)/);
+    assert.match(flows, /amount: amountPesewas,\s*currency: "GHS"/);
+  });
+  it("collects artisan identity details and keeps phone out of the public directory", function () {
+    const app = read("public/app.js");
+    const flows = read("public/flows.js");
+    const styles = read("public/styles.css");
+    assert.match(flows, /id="acctName"/);
+    assert.match(flows, /id="acctPhone"/);
+    assert.match(flows, /id="artisanFields"[\s\S]*?\$\{acctRole === "artisan" \? "" : "hidden"\}/);
+    assert.match(styles, /#artisanFields\[hidden\]\s*\{\s*display:\s*none\s*!important;/);
+    assert.match(flows, /label for="acctName"/);
+    assert.match(flows, /label for="acctPhone"/);
+    assert.match(flows, /Auth\.updateMetadata\(\{ artisan_phone: details\.phone \}\)/);
+    assert.match(app, /artisanPhone: meta\.artisan_phone \|\| null/);
+    assert.match(app, /profiles\?select=id,role,name,trade,area,rating,jobs&role=eq\.artisan/);
+  });
+});
 describe("hardened response headers", function () {
   it("sends every required header and never sends CORS allowlists", function () {
     const body = read("src/static.js");
     for (const h of ["X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy",
-      "Strict-Transport-Security", "Cross-Origin-Opener-Policy", "Cross-Origin-Embedder-Policy",
-      "Cross-Origin-Resource-Policy", "Content-Security-Policy"]) {
+      "Strict-Transport-Security", "Cross-Origin-Opener-Policy", "Cross-Origin-Resource-Policy",
+      "Content-Security-Policy"]) {
       assert.ok(body.indexOf('"' + h + '"') !== -1, h + " must be set");
     }
     assert.match(body, /"X-Content-Type-Options": "nosniff"/);
     assert.match(body, /"X-Frame-Options": "SAMEORIGIN"/);
     assert.match(body, /"Referrer-Policy": "no-referrer"/);
     assert.match(body, /"Cross-Origin-Opener-Policy": "same-origin-allow-popups"/);
-    assert.match(body, /"Cross-Origin-Embedder-Policy": "credentialless"/);
     assert.match(body, /"Cross-Origin-Resource-Policy": "same-origin"/);
+    assert.ok(!/"Cross-Origin-Embedder-Policy"\s*:/.test(body), "COEP must not block Paystack's cross-origin checkout iframe");
     assert.ok(!/"Access-Control-Allow-Origin"\s*:/.test(body), "same-origin API: no CORS headers anywhere");
     assert.ok(!/"Access-Control-Allow-Origin"\s*:/.test(read("server.js")), "server.js must not add CORS headers");
   });
@@ -90,6 +113,8 @@ describe("hardened response headers", function () {
     assert.ok(dir.indexOf("*") === -1, "style-src must not contain wildcards/broad sources");
     assert.ok(dir.indexOf("'self'") !== -1, "style-src keeps 'self'");
     assert.ok(dir.indexOf("https://fonts.googleapis.com") !== -1, "Google Fonts stylesheet stays explicitly allowlisted");
+    assert.match(body, /style-src-attr 'unsafe-inline'/, "Paystack inline checkout styles are allowed without relaxing style-src");
+    assert.match(body, /https:\/\/get\.geojs\.io/, "IP location fallback endpoint is explicitly allowlisted");
     const font = body.match(/font-src ([^;"]*)/);
     assert.ok(font && font[1].indexOf("data:") === -1, "font-src must not contain data:");
     assert.ok(body.indexOf("frame-ancestors 'self'") !== -1, "CSP must carry frame-ancestors 'self'");
