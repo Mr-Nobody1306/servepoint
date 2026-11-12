@@ -1,5 +1,7 @@
 /* ServePoint Ghana — PART 4: app logic A (config, data, backend, router, home). Extracted from index.html; order matters (loads before flows.js). */
-/* ServePoint — PART 4 (secure split: public keys in config.js, Groq key in server .env) */
+/* ServePoint — PART 4 (secure split). Public keys come from public/config.js
+   (window.FIXHUB_CONFIG, filled with your Supabase + Paystack values).
+   The Groq key lives only in the server .env — never in this file. */
 function publicSetting(name) {
   if (typeof window !== "undefined" && window.FIXHUB_CONFIG && window.FIXHUB_CONFIG[name]) return String(window.FIXHUB_CONFIG[name]);
   if (typeof root !== "undefined" && root[name]) return String(root[name]);
@@ -10,9 +12,13 @@ const CFG = {
   supabaseUrl: publicSetting("supabaseUrl"),
   supabaseKey: publicSetting("supabaseAnonKey")
 };
-const LIVE_PAY = CFG.paystackKey && CFG.paystackKey.indexOf("PASTE") !== 0 && typeof PaystackPop !== "undefined";
+function hasLivePaystack() {
+  const key = (CFG.paystackKey || "").trim();
+  return !!key && key.indexOf("PASTE") !== 0 && key.indexOf("YOUR_") !== 0 && typeof window !== "undefined" && !!window.PaystackPop;
+}
+const LIVE_PAY = hasLivePaystack();
 const LIVE_DB = CFG.supabaseUrl && CFG.supabaseUrl.indexOf("PASTE") !== 0 && CFG.supabaseKey && CFG.supabaseKey.indexOf("PASTE") !== 0;
-
+window.APP_REV = "secure-2026-11-12";
 
 const SERVICES = [
   { id: "plumbing", name: "Plumbing", base: 80, tint: "#E0F2FE", color: "#0369A1", blurb: "Leaks, pipes, tanks & fittings",
@@ -108,13 +114,28 @@ const Auth = {
     const n = Object.assign({}, s, {
       uid: u.id,
       email: u.email || null,
-      name: meta.full_name || meta.name || (u.email ? u.email.split("@")[0] : "ServePoint user")
+      name: meta.full_name || meta.name || (u.email ? u.email.split("@")[0] : "ServePoint user"),
+      artisanPhone: meta.artisan_phone || null
     });
     this.persist(n);
     return n;
   },
+  async updateMetadata(data) {
+    const s = await this.session();
+    if (!s || !s.access) throw new Error("No active user session");
+    const r = await fetch(CFG.supabaseUrl + "/auth/v1/user", {
+      method: "PUT",
+      headers: { apikey: CFG.supabaseKey, Authorization: "Bearer " + s.access, "Content-Type": "application/json" },
+      body: JSON.stringify({ data })
+    });
+    if (!r.ok) throw new Error("Could not save account details");
+    const u = await r.json();
+    const n = Object.assign({}, s, { artisanPhone: ((u && u.user_metadata) || {}).artisan_phone || null });
+    this.persist(n);
+    return n;
+  },
   loginWithGoogle() {
-    if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in main.pjs, then reload"); return; }
+    if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase URL + anon key in public/config.js, then reload"); return; }
     const redirect = this.topUrl() + "?oauth=done";
     const url = CFG.supabaseUrl + "/auth/v1/authorize?provider=google&redirect_to=" + encodeURIComponent(redirect);
     const w = window.open(url, "fixhub_login", "width=480,height=680");
@@ -169,7 +190,12 @@ const Auth = {
     if (!r.ok) throw 0;
     const j = await r.json();
     if (!j.access_token) throw 0;
-    const n = { uid: (j.user && j.user.id) || s.uid, access: j.access_token, refresh: j.refresh_token || s.refresh, exp: Date.now() + 50 * 60 * 1000 };
+    const n = Object.assign({}, s, {
+      uid: (j.user && j.user.id) || s.uid,
+      access: j.access_token,
+      refresh: j.refresh_token || s.refresh,
+      exp: Date.now() + 50 * 60 * 1000
+    });
     this.persist(n);
     return n;
   },
@@ -250,7 +276,7 @@ const Backend = {
   async artisans() {
     if (!LIVE_DB) return [];
     try {
-      const rows = await this.sbGet("profiles?select=*&role=eq.artisan&order=rating.desc&limit=50");
+      const rows = await this.sbGet("profiles?select=id,role,name,trade,area,rating,jobs&role=eq.artisan&order=rating.desc&limit=50");
       return (rows || []).map(rowToProfile);
     } catch (e) { return []; }
   },
@@ -299,25 +325,34 @@ async function ensureProfile() {
     const r = await fetch(CFG.supabaseUrl + "/rest/v1/profiles?id=eq." + encodeURIComponent(me.uid) + "&select=*", { headers: Backend.headers(token) });
     if (!r.ok) throw 0;
     const rows = await r.json();
-    if (rows && rows[0]) { S.profile = rowToProfile(rows[0]); persist(); try { updateAvatar(); } catch (e) {} return S.profile; }
+    if (rows && rows[0]) {
+      S.profile = rowToProfile(rows[0]);
+      S.profile.phone = me.artisanPhone || null;
+      persist();
+      try { updateAvatar(); } catch (e) {}
+      return S.profile;
+    }
     let pending = null;
     try { pending = JSON.parse(localStorage.getItem("fixhub_pending_role") || "null"); } catch (e) {}
     const role = pending && pending.role === "artisan" ? "artisan" : "customer";
     const body = {
       id: me.uid, role,
-      name: String((me.name || "ServePoint user")).slice(0, 120),
+      name: String((role === "artisan" && pending && pending.name) || me.name || "ServePoint user").slice(0, 120),
       trade: role === "artisan" ? (pending && pending.trade) || null : null,
       area: role === "artisan" ? (pending && pending.area) || null : null,
       rating: 5.0, jobs: 0
     };
+    if (role === "artisan" && pending && pending.phone) await Auth.updateMetadata({ artisan_phone: pending.phone });
+    const profileToken = await Auth.bearer();
     const w = await fetch(CFG.supabaseUrl + "/rest/v1/profiles", {
       method: "POST",
-      headers: Object.assign(Backend.headers(token), { "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }),
+      headers: Object.assign(Backend.headers(profileToken), { "Content-Type": "application/json", Prefer: "resolution=merge-duplicates" }),
       body: JSON.stringify(body)
     });
     if (!w.ok) throw 0;
-    S.profile = { id: me.uid, role, name: body.name, trade: body.trade, area: body.area, rating: 5.0, jobs: 0 };
+    S.profile = { id: me.uid, role, name: body.name, phone: role === "artisan" ? pending.phone : null, trade: body.trade, area: body.area, rating: 5.0, jobs: 0 };
     persist();
+    try { localStorage.removeItem("fixhub_pending_role"); } catch (e) {}
     try { updateAvatar(); } catch (e) {}
     return S.profile;
   } catch (e) { return null; }
@@ -344,8 +379,20 @@ async function ensureProfile() {
 /* ---------- tiny router ---------- */
 const VIEWS = ["home", "diag", "services", "account", "privacy", "book1", "book2", "track", "pay", "history", "admin"];
 let privacyFrom = "account";
+function requireSignedInForProtectedView(name) {
+  const protectedViews = ["services", "book1", "book2", "track", "pay", "history"];
+  if (!protectedViews.includes(name)) return true;
+  const signedIn = !!(Auth && typeof Auth.googleUid === "function" && Auth.googleUid()) && !!(S && S.profile);
+  if (!signedIn) {
+    toast("Please sign in with Google before accessing services and bookings.");
+    if (name !== "account") show("account");
+    return false;
+  }
+  return true;
+}
 function show(name) {
-  VIEWS.forEach(v => { document.getElementById("view-" + v).hidden = (v !== name); });
+  if (!requireSignedInForProtectedView(name)) return;
+  VIEWS.forEach(v => { const el = document.getElementById("view-" + v); if (el) el.hidden = (v !== name); });
   closeNav();
   const appEl = document.getElementById("app");
   if (appEl) appEl.classList.toggle("wide", name === "admin");
@@ -402,14 +449,6 @@ function ensureBurgers() {
     h.insertBefore(b, h.firstChild);
     wireBurger(b);
   });
-  const crumb = document.querySelector("#view-admin .sp-crumbrow");
-  if (crumb && !crumb.querySelector(".burgerBtn")) {
-    const b = document.createElement("button");
-    b.className = "burgerBtn";
-    b.setAttribute("aria-label", "Open navigation");
-    crumb.insertBefore(b, crumb.firstChild);
-    wireBurger(b);
-  }
 }
 document.addEventListener("click", (e) => {
   const g = e.target.closest("[data-goto]");
@@ -421,8 +460,6 @@ document.addEventListener("click", (e) => {
   }
   const b = e.target.closest("[data-back]");
   if (b) { show(b.dataset.back); return; }
-  const at = e.target.closest("[data-atab]");
-  if (at) { setAdminTab(at.dataset.atab); return; }
   const c = e.target.closest("[data-close]");
   if (c) { document.getElementById(c.dataset.close).hidden = true; }
 });
@@ -619,7 +656,7 @@ function renderHomeExtras() {
 async function renderJobs() {
   const box = document.getElementById("jobsList");
   if (!box) return;
-  if (!LIVE_DB) { box.innerHTML = '<div class="glasscard p-4"><p class="font-display font-bold f15">Backend not connected</p><p class="f13 soft mt-1">Open requests appear here once you add your Supabase URL + anon key in main.pjs and reload.</p></div>'; return; }
+  if (!LIVE_DB) { box.innerHTML = '<div class="glasscard p-4"><p class="font-display font-bold f15">Backend not connected</p><p class="f13 soft mt-1">Open requests appear here once you add your Supabase URL + anon key in public/config.js and reload.</p></div>'; return; }
   box.innerHTML = '<p class="f14 soft">Finding open requests…</p>';
   let jobs = [];
   try { jobs = await Backend.openJobs(); } catch (e) { jobs = []; }
@@ -641,7 +678,7 @@ async function renderJobs() {
   });
 }
 async function applyForJob(j) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   if (!S.profile || S.profile.role !== "artisan" || !Auth.googleUid()) { toast("Log in as an artisan to apply"); show("account"); return; }
   try {
     await Backend.apply(j);
@@ -660,20 +697,20 @@ function adminStatusPill(st) {
   return '<span class="sp-pill sp-pill-amber">Awaiting review</span>';
 }
 async function approveApplication(id) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   try { await Backend.setApplication(id, "accepted"); toast("Approved — the artisan can start"); }
   catch (e) { toast("Could not approve — check your connection"); }
   renderAdmin();
 }
 async function suspendApplication(id) {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs"); return; }
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js"); return; }
   try { await Backend.setApplication(id, "declined"); toast("Application suspended"); }
   catch (e) { toast("Could not suspend — check your connection"); }
   renderAdmin();
 }
 function adminSetupCard(msg) {
   return `<div class="sp-card"><p class="sp-card-title">Backend not connected</p>
-    <p class="f13 sp-soft mt-1">${msg || "Add your Supabase URL + anon key in main.pjs and sign in with Google to see live numbers here."}</p></div>`;
+    <p class="f13 sp-soft mt-1">${msg || "Add your Supabase URL + anon key in public/config.js and sign in with Google to see live numbers here."}</p></div>`;
 }
 async function renderAdmin() {
   const g = Auth.googleUid();

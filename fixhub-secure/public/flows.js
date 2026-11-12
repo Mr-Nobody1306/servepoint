@@ -1,7 +1,17 @@
 /* ServePoint Ghana — PART 5: app logic B (booking, tracking, payment, history, AI chat). Extracted from index.html; loads after app.js. */
 /* ---------- booking flow ---------- */
 let draft = S.draft || null;
+function ensureLoggedInForBooking() {
+  const signedIn = !!(Auth && typeof Auth.googleUid === "function" && Auth.googleUid()) && !!(S && S.profile);
+  if (!signedIn) {
+    toast("Please sign in with Google before booking a service.");
+    show("account");
+    return false;
+  }
+  return true;
+}
 function startBooking(serviceId) {
+  if (!ensureLoggedInForBooking()) return;
   draft = { serviceId, desc: "", area: (S.homeArea || AREAS[0]), addr: "", date: new Date().toISOString().slice(0, 10), slot: SLOTS[1], voiceSecs: 0, photo: null, voiceUrl: null };
   S.draft = draft; persist();
   fillBook1();
@@ -59,6 +69,7 @@ function priceOf(serviceId, senior) {
   return { service: s.base, transport: TRANSPORT, discount, total: s.base + TRANSPORT - discount };
 }
 document.getElementById("toStep2Btn").onclick = () => {
+  if (!ensureLoggedInForBooking()) return;
   if (!draft.addr.trim()) { toast("Add your street / landmark so the artisan finds you"); document.getElementById("addrInput").focus(); return; }
   if (!draft.date) { toast("Pick a preferred day"); return; }
   S.draft = draft; persist();
@@ -81,9 +92,10 @@ document.getElementById("toStep2Btn").onclick = () => {
 function row2(k, v, green) {
   return `<div class="flex justify-between"><span class="text-ink-soft">${k}</span><span class="font-bold ${green ? "text-trust" : ""}">${v}</span></div>`;
 }
-function escapeHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+function escapeHtml(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;"); }
 document.getElementById("dispatchBtn").onclick = async () => {
-  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in main.pjs, then reload"); return; }
+  if (!ensureLoggedInForBooking()) return;
+  if (!LIVE_DB) { toast("Backend not connected yet — add your Supabase keys in public/config.js, then reload"); return; }
   const p = priceOf(draft.serviceId, S.senior);
   const t = TECHS[draft.serviceId];
   const g = Auth.googleUid();
@@ -350,17 +362,21 @@ document.getElementById("payBtn").onclick = () => {
   if (!b) return;
   const m = payMethod();
   if (m === "Cash to Artisan") { completeBooking(b, m); return; }
-  if (!LIVE_PAY || typeof PaystackPop === "undefined") { toast("Payment not connected yet — add your Paystack public key in main.pjs, then reload"); return; }
+  const paystackReady = typeof window !== "undefined" && !!window.PaystackPop && !!(CFG.paystackKey || "").trim() && String(CFG.paystackKey).indexOf("PASTE") !== 0 && String(CFG.paystackKey).indexOf("YOUR_") !== 0;
+  if (!paystackReady) { toast("Payment not connected yet — add your Paystack public key in public/config.js, then reload"); return; }
   const session = Auth.load() || {};
   const email = session.email || ("customer-" + String(Auth.uid() || "guest").replace(/[^a-zA-Z0-9]/g, "") + "@servepoint.gh");
-  const handler = PaystackPop.setup({
-    key: CFG.paystackKey,
+  const amountGhs = Number(b.total);
+  const amountPesewas = Math.round(amountGhs * 100);
+  if (!Number.isFinite(amountPesewas) || amountPesewas < 1) { toast("Invalid payment amount — please contact support"); return; }
+  const handler = window.PaystackPop.setup({
+    key: String(CFG.paystackKey).trim(),
     email,
-    amount: Math.round(Number(b.total) * 100),
+    amount: amountPesewas,
     currency: "GHS",
     ref: b.id + "-" + Date.now(),
-    metadata: { booking: b.id, service: b.serviceId, method: m, total: b.total },
-    channels: ["mobile_money"],
+    metadata: { booking: b.id, service: b.serviceId, method: m, total: amountGhs },
+    channels: ["card", "bank", "mobile_money"],
     callback: (resp) => {
       try { b.payRef = resp && resp.reference ? resp.reference : null; } catch (e) {}
       completeBooking(b, m);
@@ -382,13 +398,13 @@ async function completeBooking(b, method) {
 /* ---------- history ---------- */
 async function renderHistory() {
   document.getElementById("backendChip").textContent = LIVE_DB ? "Live Supabase" : "Not connected";
-  document.getElementById("histSub").textContent = LIVE_DB ? "Synced jobs" : "Add keys in main.pjs to connect";
+  document.getElementById("histSub").textContent = LIVE_DB ? "Synced jobs" : "Add keys in public/config.js to connect";
   const all = await Backend.list();
   const a = all.find(b => b.id === S.activeId && ["dispatched", "enroute", "arrived", "working"].includes(b.status));
   const box = document.getElementById("activeJobCard");
   box.innerHTML = "";
   if (!LIVE_DB) {
-    box.innerHTML = `<div class="bg-white border border-line rounded-2xl shadow-card p-4"><p class="font-display font-extrabold f16">Backend not connected</p><p class="f13 text-ink-soft mt-1">Your bookings will sync here once the app is connected. In <span class="font-bold">main.pjs</span>, paste your Supabase URL + anon key and your Paystack public key, then reload.</p></div>`;
+    box.innerHTML = `<div class="bg-white border border-line rounded-2xl shadow-card p-4"><p class="font-display font-extrabold f16">Backend not connected</p><p class="f13 text-ink-soft mt-1">Your bookings will sync here once the app is connected. In <span class="font-bold">public/config.js</span>, paste your Supabase URL + anon key and your Paystack public key, then reload.</p></div>`;
     const pl = document.getElementById("pastList");
     if (pl) pl.innerHTML = "";
     const ow = document.getElementById("openWrap");
@@ -550,7 +566,15 @@ function matchSymptom(text) {
   return null;
 }
 function estRange(id) { const s = svc(id); const hi = Math.round(s.base * 1.6 / 10) * 10; return [s.base, hi]; }
-function diagScroll() { const sc = document.getElementById("screens"); sc.scrollTop = sc.scrollHeight; }
+function diagScroll() {
+  try { const sc = document.getElementById("screens"); sc.scrollTop = sc.scrollHeight; } catch (e) {}
+  try { window.scrollTo(0, document.body.scrollHeight); } catch (e) {}
+  try {
+    const box = document.getElementById("diagChat");
+    const last = box && box.lastElementChild;
+    if (last && last.scrollIntoView) last.scrollIntoView({ block: "end" });
+  } catch (e) {}
+}
 function diagBubble(text, who) {
   const box = document.getElementById("diagChat");
   const d = document.createElement("div");
@@ -749,6 +773,14 @@ function renderServices() {
 
 /* ---------- account: Google login, roles, profile ---------- */
 let acctRole = "customer";
+function artisanDetails(nameValue, phoneValue) {
+  const name = String(nameValue || "").trim();
+  const phone = String(phoneValue || "").trim();
+  const digits = phone.replace(/\D/g, "").length;
+  if (name.length < 2 || name.length > 120) { toast("Enter your full name"); return null; }
+  if (!/^\+?[0-9\s()-]{7,24}$/.test(phone) || digits < 9 || digits > 15) { toast("Enter a valid contact phone number"); return null; }
+  return { name, phone };
+}
 function tradeOptions(sel) {
   return SERVICES.map(s => `<option value="${s.id}" ${s.id === sel ? "selected" : ""}>${s.name}</option>`).join("");
 }
@@ -771,18 +803,34 @@ function renderAccount() {
     `<div class="glasscard p-4">
       <p class="font-display font-extrabold f16">I am a…</p>
       <div class="grid grid-cols-2 gap-2 mt-2">
-        <button id="roleCustomer" class="rounded-2xl p-3.5 font-bold f14 mh56 border ${acctRole === "customer" ? "btn-dark text-white" : "border-line"}">Customer<br><span class="f11 font-normal opacity-70">Book artisans</span></button>
-        <button id="roleArtisan" class="rounded-2xl p-3.5 font-bold f14 mh56 border ${acctRole === "artisan" ? "btn-dark text-white" : "border-line"}">Artisan<br><span class="f11 font-normal opacity-70">Apply for jobs</span></button>
+        <button id="roleCustomer" aria-pressed="${acctRole === "customer"}" class="rounded-2xl p-3.5 font-bold f14 mh56 border ${acctRole === "customer" ? "btn-dark text-white" : "border-line"}">Customer<br><span class="f11 font-normal opacity-70">Book artisans</span></button>
+        <button id="roleArtisan" aria-pressed="${acctRole === "artisan"}" class="rounded-2xl p-3.5 font-bold f14 mh56 border ${acctRole === "artisan" ? "btn-dark text-white" : "border-line"}">Artisan<br><span class="f11 font-normal opacity-70">Apply for jobs</span></button>
       </div>
-      <div id="artisanFields" class="grid grid-cols-2 gap-2 mt-2" ${acctRole === "artisan" ? "" : "hidden"}>
-        <select id="acctTrade" class="field rounded-xl p-3 f14">${tradeOptions("plumbing")}</select>
-        <select id="acctArea" class="field rounded-xl p-3 f14">${areaOptions(S.homeArea || AREAS[0])}</select>
+      <div id="artisanFields" class="artisan-fields mt-3 p-4 rounded-2xl border border-line bg-white" ${acctRole === "artisan" ? "" : "hidden"}>
+        <p class="font-display font-bold f15">Set up your artisan profile</p>
+        <p class="f12 soft mt-1">Add your contact details and the work you do.</p>
+        <div class="mt-3">
+          <label for="acctName" class="block f12 font-bold text-ink-soft mb-1">Full name</label>
+          <input id="acctName" class="field rounded-xl p-3 f14 w-full" type="text" maxlength="120" autocomplete="name" placeholder="e.g. Ama Mensah" required>
+        </div>
+        <div class="mt-3">
+          <label for="acctPhone" class="block f12 font-bold text-ink-soft mb-1">Contact phone</label>
+          <input id="acctPhone" class="field rounded-xl p-3 f14 w-full" type="tel" maxlength="24" autocomplete="tel" placeholder="e.g. 024 123 4567" aria-describedby="acctPhoneHelp" required>
+          <p id="acctPhoneHelp" class="f11 soft mt-1">Used for your account contact and kept private.</p>
+        </div>
+        <div class="mt-3">
+          <label for="acctTrade" class="block f12 font-bold text-ink-soft mb-1">Your trade</label>
+          <select id="acctTrade" class="field rounded-xl p-3 f14 w-full">${tradeOptions("plumbing")}</select>
+        </div>
+        <div class="mt-3">
+          <label for="acctArea" class="block f12 font-bold text-ink-soft mb-1">Your work area</label>
+          <select id="acctArea" class="field rounded-xl p-3 f14 w-full">${areaOptions(S.homeArea || AREAS[0])}</select>
+        </div>
       </div>
       ${LIVE_DB
         ? '<button id="googleBtn" class="btn-dark mt-3 w-full font-display font-bold f15 rounded-2xl py-4 mh56 flex items-center justify-center gap-2"><svg class="w-5 h-5" viewBox="0 0 24 24"><path fill="#fff" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.6h3.2c1.9-1.7 3-4.3 3-7.5z"/><path fill="#fff" opacity=".8" d="M12 22c2.7 0 5-1 6.6-2.5l-3.2-2.6c-.9.6-2 1-3.4 1-2.6 0-4.8-1.8-5.6-4.1H3.1v2.7A10 10 0 0 0 12 22z"/><path fill="#fff" opacity=".8" d="M6.4 13.8a6 6 0 0 1 0-3.6V7.5H3.1a10 10 0 0 0 0 9z"/><path fill="#fff" opacity=".8" d="M12 5.9c1.5 0 2.8.5 3.8 1.5L18.7 4A10 10 0 0 0 3.1 7.5l3.3 2.5c.8-2.3 3-4.1 5.6-4.1z"/></svg> Continue with Google</button>'
-        : '<p class="f13 soft mt-3 glasscard p-3">Google login + live bookings + real MoMo payments activate once you add your Supabase + Paystack keys in main.pjs (see src/SUPABASE_SETUP.md). You can still look around as a guest.</p>'}
+        : '<p class="f13 soft mt-3 glasscard p-3">Google login + live bookings + real MoMo payments activate once you add your Supabase + Paystack keys in public/config.js (see README.md). You can still look around as a guest.</p>'}
       <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line" data-goto="home">Continue as guest</button>
-      <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line" data-goto="admin">Administration dashboard</button>
       <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
       <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="privacy">Privacy & data safety</button>
       <p class="f11 soft mt-2">Guests can browse the app. Booking and payments go live once the backend keys are added.</p>
@@ -793,9 +841,16 @@ function renderAccount() {
     applySenior();
     const gb = document.getElementById("googleBtn");
     if (gb) gb.onclick = () => {
+      let details = null;
+      if (acctRole === "artisan") {
+        details = artisanDetails(document.getElementById("acctName").value, document.getElementById("acctPhone").value);
+        if (!details) return;
+      }
       try {
         localStorage.setItem("fixhub_pending_role", JSON.stringify({
           role: acctRole,
+          name: details ? details.name : null,
+          phone: details ? details.phone : null,
           trade: acctRole === "artisan" ? document.getElementById("acctTrade").value : null,
           area: acctRole === "artisan" ? document.getElementById("acctArea").value : null
         }));
@@ -814,22 +869,44 @@ function renderAccount() {
     <span class="${p.role === "artisan" ? "greenpill" : "chipx on rolechip-cust"} flex-none">${p.role === "artisan" ? "Artisan" : "Customer"}</span>
   </div>
   ${p.role === "artisan" ? `<div class="glasscard p-4 mt-3">
-    <p class="font-display font-bold f15">My trade</p>
-    <div class="grid grid-cols-2 gap-2 mt-2">
-      <select id="acctTrade" class="field rounded-xl p-3 f14">${tradeOptions(p.trade || "plumbing")}</select>
-      <select id="acctArea" class="field rounded-xl p-3 f14">${areaOptions(p.area || AREAS[0])}</select>
+    <p class="font-display font-bold f15">My artisan profile</p>
+    <div class="mt-3">
+      <label for="acctName" class="block f12 font-bold text-ink-soft mb-1">Full name</label>
+      <input id="acctName" class="field rounded-xl p-3 f14 w-full" type="text" maxlength="120" autocomplete="name" value="${escapeHtml(p.name || "")}" placeholder="Full name">
     </div>
-    <button id="saveTradeBtn" class="mt-2 w-full btn-dark font-display font-bold f14 rounded-2xl py-3.5 mh52">Save trade</button>
+    <div class="mt-3">
+      <label for="acctPhone" class="block f12 font-bold text-ink-soft mb-1">Contact phone</label>
+      <input id="acctPhone" class="field rounded-xl p-3 f14 w-full" type="tel" maxlength="24" autocomplete="tel" value="${escapeHtml(p.phone || "")}" placeholder="Contact phone number">
+      <p class="f11 soft mt-1">Kept private in your account.</p>
+    </div>
+    <div class="mt-3">
+      <label for="acctTrade" class="block f12 font-bold text-ink-soft mb-1">Your trade</label>
+      <select id="acctTrade" class="field rounded-xl p-3 f14 w-full">${tradeOptions(p.trade || "plumbing")}</select>
+    </div>
+    <div class="mt-3">
+      <label for="acctArea" class="block f12 font-bold text-ink-soft mb-1">Your work area</label>
+      <select id="acctArea" class="field rounded-xl p-3 f14 w-full">${areaOptions(p.area || AREAS[0])}</select>
+    </div>
+    <button id="saveTradeBtn" class="mt-2 w-full btn-dark font-display font-bold f14 rounded-2xl py-3.5 mh52">Save profile</button>
   </div>` : ""}
   <button id="logoutBtn" class="mt-3 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-red-200 text-cancel bg-white">Log out</button>
-  <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="admin">Administration dashboard</button>
   <button class="easyTBtn mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white">Easy View: Off</button>
   <button class="mt-2 w-full font-bold f14 rounded-2xl py-3.5 mh52 border border-line bg-white" data-goto="privacy">Privacy & data safety</button>`;
   const st = document.getElementById("saveTradeBtn");
   if (st) st.onclick = async () => {
+    const details = artisanDetails(document.getElementById("acctName").value, document.getElementById("acctPhone").value);
+    if (!details) return;
     try {
-      await Backend.saveProfile({ trade: document.getElementById("acctTrade").value, area: document.getElementById("acctArea").value });
-      toast("Trade updated");
+      await Backend.saveProfile({
+        name: details.name,
+        trade: document.getElementById("acctTrade").value,
+        area: document.getElementById("acctArea").value
+      });
+      await Auth.updateMetadata({ artisan_phone: details.phone });
+      S.profile.phone = details.phone;
+      persist();
+      renderAccount();
+      toast("Profile updated");
     } catch (e) { toast("Could not save — check your connection"); }
   };
   document.getElementById("logoutBtn").onclick = () => Auth.logout();
