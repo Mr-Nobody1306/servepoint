@@ -12,6 +12,8 @@ export interface User {
   trade?: string;
   area?: string;
   address?: string;
+  status?: "active" | "suspended";
+  suspended?: boolean;
 }
 
 export interface ProviderAvailability {
@@ -41,6 +43,7 @@ export interface Provider {
   area: string;
   phone?: string;
   status: "approved" | "pending" | "declined" | "suspended";
+  suspended?: boolean;
   initials?: string;
   color?: string;
   image?: string;
@@ -52,6 +55,20 @@ export interface Provider {
     insurance: boolean;
     references: number;
   };
+}
+
+export interface AdminCustomer {
+  id: string;
+  name: string;
+  email: string;
+  phone?: string;
+  area?: string;
+  address?: string;
+  status: "active" | "suspended";
+  suspended?: boolean;
+  totalBookings: number;
+  completedBookingsCount: number;
+  grossSpendGhs: number;
 }
 
 export interface Booking {
@@ -258,6 +275,38 @@ export const api = {
     return request<{ ok: boolean; booking: Booking }>(`/api/bookings/${encodeURIComponent(bookingId)}/progress`, {
       method: "POST",
       body: JSON.stringify({ action, notes }),
+    });
+  },
+
+  // Admin Operations
+  async getAdminCustomers(): Promise<{ ok: boolean; customers: AdminCustomer[] }> {
+    return request<{ ok: boolean; customers: AdminCustomer[] }>("/api/admin/customers");
+  },
+
+  async updateCustomerStatus(customerId: string, status: "active" | "suspended", reason?: string): Promise<{ ok: boolean; customer: AdminCustomer }> {
+    return request<{ ok: boolean; customer: AdminCustomer }>(`/api/admin/customers/${encodeURIComponent(customerId)}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status, reason }),
+    });
+  },
+
+  async setProviderSuspension(providerId: string, suspended: boolean): Promise<{ ok: boolean; provider: Provider }> {
+    return request<{ ok: boolean; provider: Provider }>(`/api/providers/${encodeURIComponent(providerId)}/suspend`, {
+      method: "POST",
+      body: JSON.stringify({ suspended }),
+    });
+  },
+
+  async adminCancelBooking(bookingId: string, reason: string): Promise<{ ok: boolean; booking: Booking }> {
+    return request<{ ok: boolean; booking: Booking }>(`/api/admin/bookings/${encodeURIComponent(bookingId)}/cancel`, {
+      method: "POST",
+      body: JSON.stringify({ reason }),
+    });
+  },
+
+  async deleteCategory(categoryId: string): Promise<{ ok: boolean; message: string }> {
+    return request<{ ok: boolean; message: string }>(`/api/categories/${encodeURIComponent(categoryId)}`, {
+      method: "DELETE",
     });
   },
 

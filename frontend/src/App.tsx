@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { api, type Booking, type Category, type PlatformStats, type Provider, type Review, type User } from "./api";
+import { api, type AdminCustomer, type Booking, type Category, type PlatformStats, type Provider, type ProviderService, type Review, type User } from "./api";
 
 type View = "home" | "explore" | "provider" | "booking" | "customer" | "pro" | "admin";
 type IconName =
@@ -222,10 +222,10 @@ const situations = [
 ];
 
 const essentials = [
-  { name: "LED light bulbs", detail: "Energy-saving · 12W", symbol: "◉" },
-  { name: "Surge protector", detail: "6-way · Individual switches",  symbol: "ϟ" },
-  { name: "Premium shower head", detail: "Chrome · 5 spray modes",  symbol: "⌇" },
-  { name: "Door handle set", detail: "Satin finish · Lock included", symbol: "⌁" },
+  { name: "LED light bulbs", detail: "Energy-saving · 12W", symbol: "◉", price: "GH₵45" },
+  { name: "Surge protector", detail: "6-way · Individual switches",  symbol: "ϟ", price: "GH₵120" },
+  { name: "Premium shower head", detail: "Chrome · 5 spray modes",  symbol: "⌇", price: "GH₵95" },
+  { name: "Door handle set", detail: "Satin finish · Lock included", symbol: "⌁", price: "GH₵85" },
 ];
 
 const categoryData = [
@@ -1388,8 +1388,26 @@ function Booking({
                   <b>GH₵{serviceRate}.00</b>
                 </div>
               </div>
+              {(currentUser?.status === "suspended" || currentUser?.suspended) && (
+                <div className="account-alert-banner suspended-banner">
+                  <Icon name="close" />
+                  <div>
+                    <strong>Account Suspended</strong>
+                    <p>Your account is currently suspended. You cannot submit new bookings.</p>
+                  </div>
+                </div>
+              )}
+              {provider.suspended && (
+                <div className="account-alert-banner suspended-banner">
+                  <Icon name="close" />
+                  <div>
+                    <strong>Provider Unavailable</strong>
+                    <p>This service provider is currently suspended and cannot receive new bookings.</p>
+                  </div>
+                </div>
+              )}
               {errorMessage && (
-                <div className="auth-error" style={{ margin: "14px 0", padding: "10px", background: "#fdf2ee", border: "1px solid #d99c85", borderRadius: "6px", color: "#c57656" }}>
+                <div className="account-alert-banner suspended-banner">
                   <strong>⚠️ Booking Conflict / Error:</strong> {errorMessage}
                 </div>
               )}
@@ -1405,8 +1423,8 @@ function Booking({
               </button>
             )}
             <button
-              className="primary-button"
-              disabled={submitting}
+              className={`primary-button ${(step === 3 && (currentUser?.status === "suspended" || currentUser?.suspended || provider.suspended)) ? "disabled-btn" : ""}`}
+              disabled={submitting || (step === 3 && Boolean(currentUser?.status === "suspended" || currentUser?.suspended || provider.suspended))}
               onClick={() => (step === 3 ? handleConfirm() : setStep(step + 1))}
             >
               {submitting ? "Booking..." : step === 3 ? "Confirm booking" : "Continue"} <Icon name="arrow" />
@@ -1663,10 +1681,32 @@ function CustomerDashboard({
             )}
           </h1>
         </div>
-        <button className="primary-button" onClick={() => go("explore")}>
+        <button
+          className={`primary-button ${(currentUser?.status === "suspended" || currentUser?.suspended) ? "disabled-btn" : ""}`}
+          disabled={Boolean(currentUser?.status === "suspended" || currentUser?.suspended)}
+          onClick={() => {
+            if (currentUser?.status === "suspended" || currentUser?.suspended) {
+              alert("Your account is currently suspended. You cannot book new services.");
+              return;
+            }
+            go("explore");
+          }}
+        >
           <Icon name="plus" /> Book a service
         </button>
       </div>
+
+      {(currentUser?.status === "suspended" || currentUser?.suspended) && (
+        <div className="account-alert-banner suspended-banner">
+          <Icon name="close" />
+          <div>
+            <strong>Account Suspended</strong>
+            <p>
+              Your account is currently suspended by administration. You can continue to view your booking history, but new service bookings cannot be created. Please contact ServePoint support.
+            </p>
+          </div>
+        </div>
+      )}
 
       {active === "Overview" ? (
         <>
@@ -2900,7 +2940,20 @@ function CategoryManagement({
         },
       ];
 
+  const CORE_CATEGORY_IDS = [
+    "plumbing",
+    "electrical",
+    "carpentry",
+    "painting",
+    "masonry",
+    "cleaning",
+    "appliances",
+    "hvac",
+    "assembly",
+  ];
+
   const selectedCategory = categories.find((c) => c.id === selectedId) || categories[0];
+  const isCoreCategory = CORE_CATEGORY_IDS.includes(selectedCategory.id.toLowerCase());
 
   useEffect(() => {
     if (selectedCategory) {
@@ -2921,6 +2974,10 @@ function CategoryManagement({
   };
 
   const handleToggleActive = async () => {
+    if (isCoreCategory) {
+      alert("Core MVP categories are protected and cannot be deactivated or deleted.");
+      return;
+    }
     const nextActive = selectedCategory.active === false ? true : false;
     try {
       await api.updateCategory(selectedCategory.id, { active: nextActive });
@@ -2966,7 +3023,7 @@ function CategoryManagement({
           <span className="kicker">APPROVED SERVICE TAXONOMY</span>
           <h2>Home-service categories ({categories.length})</h2>
         </div>
-        <div style={{ display: "flex", gap: "10px" }}>
+        <div className="panel-actions-group">
           <span className="locked-label">
             <Icon name="check" size={13} /> {categories.filter((c) => c.active !== false).length} active
           </span>
@@ -3024,7 +3081,7 @@ function CategoryManagement({
         </p>
 
         {editing ? (
-          <div className="form-grid" style={{ margin: "16px 0" }}>
+          <div className="form-grid">
             <label className="full">
               Category Description
               <textarea
@@ -3033,7 +3090,7 @@ function CategoryManagement({
                 placeholder="Describe services covered under this category..."
               />
             </label>
-            <div style={{ display: "flex", gap: "10px" }}>
+            <div className="panel-actions-group">
               <button className="primary-button" onClick={handleSaveDescription}>
                 Save changes <Icon name="check" />
               </button>
@@ -3043,17 +3100,20 @@ function CategoryManagement({
             </div>
           </div>
         ) : (
-          <div style={{ display: "flex", gap: "12px", marginTop: "14px" }}>
+          <div className="panel-actions-group">
             <button className="outline-button" onClick={() => setEditing(true)}>
               Edit description <Icon name="arrow" />
             </button>
-            <button
-              className="outline-button"
-              onClick={handleToggleActive}
-              style={{ color: selectedCategory.active === false ? "#7e9270" : "#c57656" }}
-            >
-              {selectedCategory.active === false ? "Enable category" : "Disable category"}
-            </button>
+            {isCoreCategory ? (
+              <span className="badge-core">Core Category (Protected)</span>
+            ) : (
+              <button
+                className={`outline-button ${selectedCategory.active === false ? "reactivate-btn" : "suspend-btn"}`}
+                onClick={handleToggleActive}
+              >
+                {selectedCategory.active === false ? "Enable category" : "Disable category"}
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -3157,6 +3217,8 @@ function AdminDashboard({
   onProviderVerified,
   onCategoryUpdated,
   onCategoryCreated,
+  onProviderSuspensionToggled,
+  onBookingAdminCancelled,
   onOpenAuth,
   onLogout,
 }: {
@@ -3169,6 +3231,8 @@ function AdminDashboard({
   onProviderVerified: (providerId: string, status: "approved" | "declined") => void;
   onCategoryUpdated: (catId: string, updates: Partial<Category>) => void;
   onCategoryCreated: (newCat: Category) => void;
+  onProviderSuspensionToggled?: (providerId: string, suspended: boolean) => void;
+  onBookingAdminCancelled?: (bookingId: string, updatedBooking: Booking) => void;
   onOpenAuth?: () => void;
   onLogout?: () => void;
 }) {
@@ -3176,7 +3240,42 @@ function AdminDashboard({
   const [dialogProvider, setDialogProvider] = useState<Provider | null>(null);
   const [toast, setToast] = useState("");
 
+  // Customers state
+  const [adminCustomers, setAdminCustomers] = useState<AdminCustomer[]>([]);
+  const [loadingCustomers, setLoadingCustomers] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState("");
+
+  // Bookings filter and actions state
+  const [bookingStatusFilter, setBookingStatusFilter] = useState("all");
+  const [bookingSearch, setBookingSearch] = useState("");
+  const [selectedBookingForDetails, setSelectedBookingForDetails] = useState<Booking | null>(null);
+  const [cancellingBooking, setCancellingBooking] = useState<Booking | null>(null);
+  const [cancelReason, setCancelReason] = useState("");
+
+  // Provider search state
+  const [providerSearch, setProviderSearch] = useState("");
+
   const pendingProviders = providersList.filter((p) => p.status === "pending");
+
+  const fetchCustomers = () => {
+    setLoadingCustomers(true);
+    api.getAdminCustomers()
+      .then((res) => {
+        if (res.ok && res.customers) {
+          setAdminCustomers(res.customers);
+        }
+      })
+      .catch((err) => {
+        console.error("Failed to load customers:", err);
+      })
+      .finally(() => setLoadingCustomers(false));
+  };
+
+  useEffect(() => {
+    if (active === "Customers") {
+      fetchCustomers();
+    }
+  }, [active]);
 
   const approve = async (provider: Provider) => {
     try {
@@ -3207,6 +3306,121 @@ function AdminDashboard({
       setTimeout(() => setToast(""), 2200);
     }
   };
+
+  const handleToggleCustomerSuspension = async (customer: AdminCustomer) => {
+    if (customer.id === currentUser?.id || customer.id === "admin") {
+      alert("Administrators cannot suspend their own admin account.");
+      return;
+    }
+    const isSuspended = customer.status === "suspended" || customer.suspended;
+    const nextStatus = isSuspended ? "active" : "suspended";
+    let reason = "";
+    if (!isSuspended) {
+      const input = window.prompt(`Enter administrative reason for suspending "${customer.name}":`, "Violation of platform standards");
+      if (input === null) return;
+      reason = input.trim();
+    } else {
+      if (!window.confirm(`Reactivate customer account for "${customer.name}"?`)) return;
+    }
+    try {
+      await api.updateCustomerStatus(customer.id, nextStatus, reason);
+      setAdminCustomers((prev) =>
+        prev.map((c) => (c.id === customer.id ? { ...c, status: nextStatus, suspended: nextStatus === "suspended" } : c)),
+      );
+      setToast(`Customer ${customer.name} is now ${nextStatus.toUpperCase()}`);
+      setTimeout(() => setToast(""), 2500);
+    } catch (err: any) {
+      alert(err.message || "Failed to update customer status");
+    }
+  };
+
+  const handleToggleProviderSuspension = async (provider: Provider) => {
+    const nextSuspended = !provider.suspended;
+    const actionLabel = nextSuspended ? "suspend" : "reactivate";
+    if (!window.confirm(`Are you sure you want to ${actionLabel} provider "${provider.name}"?`)) return;
+    try {
+      await api.setProviderSuspension(provider.id, nextSuspended);
+      if (onProviderSuspensionToggled) {
+        onProviderSuspensionToggled(provider.id, nextSuspended);
+      }
+      setToast(`Provider ${provider.name} is now ${nextSuspended ? "SUSPENDED" : "REACTIVATED"}`);
+      setTimeout(() => setToast(""), 2500);
+    } catch (err: any) {
+      alert(err.message || `Failed to ${actionLabel} provider`);
+    }
+  };
+
+  const handleConfirmAdminCancel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!cancellingBooking) return;
+    if (!cancelReason.trim()) {
+      alert("A non-empty cancellation reason is required.");
+      return;
+    }
+    try {
+      const res = await api.adminCancelBooking(cancellingBooking.id, cancelReason.trim());
+      if (res.ok && res.booking) {
+        if (onBookingAdminCancelled) {
+          onBookingAdminCancelled(cancellingBooking.id, res.booking);
+        }
+        setToast(`Booking ${cancellingBooking.id} cancelled by admin`);
+        setTimeout(() => setToast(""), 2500);
+        setCancellingBooking(null);
+        setCancelReason("");
+      }
+    } catch (err: any) {
+      alert(err.message || "Failed to administratively cancel booking.");
+    }
+  };
+
+  const filteredBookings = useMemo(() => {
+    return bookingsList.filter((b) => {
+      if (bookingStatusFilter !== "all") {
+        if (bookingStatusFilter === "rejected") {
+          if (b.status !== "declined" && b.status !== "rejected") return false;
+        } else if (bookingStatusFilter === "in-progress") {
+          if (b.status !== "in-progress" && (b.status as string) !== "in_progress") return false;
+        } else if (b.status !== bookingStatusFilter) {
+          return false;
+        }
+      }
+      if (bookingSearch.trim()) {
+        const q = bookingSearch.toLowerCase();
+        const match =
+          b.id.toLowerCase().includes(q) ||
+          (b.customerName || "").toLowerCase().includes(q) ||
+          (b.providerName || "").toLowerCase().includes(q) ||
+          (b.serviceName || "").toLowerCase().includes(q) ||
+          (b.address || "").toLowerCase().includes(q);
+        if (!match) return false;
+      }
+      return true;
+    });
+  }, [bookingsList, bookingStatusFilter, bookingSearch]);
+
+  const filteredProviders = useMemo(() => {
+    if (!providerSearch.trim()) return providersList;
+    const q = providerSearch.toLowerCase();
+    return providersList.filter(
+      (p) =>
+        p.name.toLowerCase().includes(q) ||
+        p.trade.toLowerCase().includes(q) ||
+        p.area.toLowerCase().includes(q) ||
+        (p.phone || "").toLowerCase().includes(q)
+    );
+  }, [providersList, providerSearch]);
+
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch.trim()) return adminCustomers;
+    const q = customerSearch.toLowerCase();
+    return adminCustomers.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q) ||
+        (c.phone || "").toLowerCase().includes(q) ||
+        (c.area || "").toLowerCase().includes(q)
+    );
+  }, [adminCustomers, customerSearch]);
 
   const grossFormatted = stats?.grossBookingsFormatted || `GH₵${(bookingsList.reduce((acc, b) => acc + (b.total || 0), 0) / 1000).toFixed(1)}k`;
 
@@ -3263,12 +3477,12 @@ function AdminDashboard({
             </div>
             <div>
               <span>ACTIVE BOOKINGS</span>
-              <b>{bookingsList.filter((b) => b.status !== "declined" && b.status !== "completed").length}</b>
+              <b>{bookingsList.filter((b) => b.status !== "declined" && b.status !== "completed" && b.status !== "cancelled" && b.status !== "rejected").length}</b>
               <small>Real platform jobs</small>
             </div>
             <div>
               <span>ACTIVE PROVIDERS</span>
-              <b>{providersList.filter((p) => p.status === "approved").length}</b>
+              <b>{providersList.filter((p) => p.status === "approved" && !p.suspended).length}</b>
               <small>{pendingProviders.length} awaiting review</small>
             </div>
             <div>
@@ -3324,9 +3538,9 @@ function AdminDashboard({
                 </div>
                 <button onClick={() => setActive("Verification queue")}>View queue</button>
               </div>
-              {pendingProviders.map((p, i) => (
+              {pendingProviders.map((p) => (
                 <div className="verify-row" key={p.id}>
-                  <span style={{ background: i ? "#d8c59f" : "#9cae95" }}>
+                  <span>
                     {p.name
                       .split(" ")
                       .map((x) => x[0])
@@ -3399,9 +3613,9 @@ function AdminDashboard({
               <input placeholder="Search applicants" />
             </div>
           </div>
-          {pendingProviders.map((p, i) => (
+          {pendingProviders.map((p) => (
             <div className="management-row" key={p.id}>
-              <span style={{ background: i ? "#d8c59f" : "#9cae95" }}>
+              <span>
                 {p.name.slice(0, 2).toUpperCase()}
               </span>
               <div>
@@ -3426,9 +3640,41 @@ function AdminDashboard({
           <div className="panel-head">
             <div>
               <span className="kicker">ALL PLATFORM TRANSACTIONS</span>
-              <h2>Bookings Directory</h2>
+              <h2>Bookings Directory ({filteredBookings.length})</h2>
             </div>
           </div>
+
+          <div className="admin-filters-bar">
+            <div className="filter-pills-group">
+              {[
+                { label: "All", value: "all" },
+                { label: "Pending", value: "pending" },
+                { label: "Accepted", value: "accepted" },
+                { label: "In Progress", value: "in-progress" },
+                { label: "Completed", value: "completed" },
+                { label: "Rejected", value: "rejected" },
+                { label: "Cancelled", value: "cancelled" },
+              ].map((f) => (
+                <button
+                  key={f.value}
+                  className={`filter-pill ${bookingStatusFilter === f.value ? "active" : ""}`}
+                  onClick={() => setBookingStatusFilter(f.value)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="filter-search-box">
+              <Icon name="search" size={14} />
+              <input
+                placeholder="Search booking ID, customer, provider..."
+                value={bookingSearch}
+                onChange={(e) => setBookingSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
           <table>
             <thead>
               <tr>
@@ -3439,10 +3685,11 @@ function AdminDashboard({
                 <th>Date & Time</th>
                 <th>Total</th>
                 <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {bookingsList.map((b) => (
+              {filteredBookings.map((b) => (
                 <tr key={b.id}>
                   <td><b>{b.id}</b></td>
                   <td>{b.customerName}</td>
@@ -3453,8 +3700,36 @@ function AdminDashboard({
                   <td>
                     <span className={`status ${b.status}`}>{b.status.toUpperCase()}</span>
                   </td>
+                  <td>
+                    <div className="action-buttons-cell">
+                      <button
+                        className="action-btn"
+                        onClick={() => setSelectedBookingForDetails(b)}
+                      >
+                        Details
+                      </button>
+                      {b.status !== "completed" && b.status !== "cancelled" && b.status !== "declined" && b.status !== "rejected" && (
+                        <button
+                          className="action-btn danger-btn"
+                          onClick={() => {
+                            setCancellingBooking(b);
+                            setCancelReason("");
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </td>
                 </tr>
               ))}
+              {!filteredBookings.length && (
+                <tr>
+                  <td colSpan={8}>
+                    <p className="all-clear">No bookings match the selected status filter or search query.</p>
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </section>
@@ -3463,13 +3738,20 @@ function AdminDashboard({
           <div className="panel-head">
             <div>
               <span className="kicker">PLATFORM TRADESPEOPLE</span>
-              <h2>Registered Providers</h2>
+              <h2>Registered Providers ({filteredProviders.length})</h2>
             </div>
-            <span className="locked-label">{providersList.length} Total</span>
+            <div className="filter-search-box">
+              <Icon name="search" size={14} />
+              <input
+                placeholder="Search providers..."
+                value={providerSearch}
+                onChange={(e) => setProviderSearch(e.target.value)}
+              />
+            </div>
           </div>
-          {providersList.map((p) => (
+          {filteredProviders.map((p) => (
             <div className="management-row" key={p.id}>
-              <span style={{ background: p.color || "#7e9270", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center" }}>
+              <span>
                 {p.initials || p.name.slice(0, 2).toUpperCase()}
               </span>
               <div>
@@ -3477,35 +3759,81 @@ function AdminDashboard({
                 <small>{p.trade} · {p.area} · 📞 {p.phone || "+233 24 555 0184"}</small>
               </div>
               <strong>★ {p.rating} ({p.jobs} jobs)</strong>
-              <i className={`status ${p.status === "approved" ? "live" : p.status}`}>
-                {p.status.toUpperCase()}
-              </i>
+              <div className="action-buttons-cell">
+                <i className={`status ${p.status === "approved" ? "live" : p.status}`}>
+                  {p.status.toUpperCase()}
+                </i>
+                {p.suspended && <i className="status suspended">SUSPENDED</i>}
+                <button
+                  className={`action-btn ${p.suspended ? "reactivate-btn" : "suspend-btn"}`}
+                  onClick={() => handleToggleProviderSuspension(p)}
+                >
+                  {p.suspended ? "Reactivate" : "Suspend"}
+                </button>
+              </div>
             </div>
           ))}
+          {!filteredProviders.length && (
+            <p className="all-clear">No providers found matching your search.</p>
+          )}
         </section>
       ) : active === "Customers" ? (
         <section className="management-panel">
           <div className="panel-head">
-            <h2>Customer Accounts</h2>
-          </div>
-          <div className="management-row">
-            <span>AB</span>
             <div>
-              <b>Ama Boateng</b>
-              <small>ama@example.com · +233 24 555 0184 · Adenta</small>
+              <span className="kicker">PLATFORM USERS</span>
+              <h2>Customer Accounts ({filteredCustomers.length})</h2>
             </div>
-            <strong>2 bookings</strong>
-            <i className="status live">ACTIVE</i>
-          </div>
-          <div className="management-row">
-            <span>KA</span>
-            <div>
-              <b>Kofi Addo</b>
-              <small>kofi@example.com · +233 24 999 0009 · Airport Residential</small>
+            <div className="filter-search-box">
+              <Icon name="search" size={14} />
+              <input
+                placeholder="Search customers..."
+                value={customerSearch}
+                onChange={(e) => setCustomerSearch(e.target.value)}
+              />
             </div>
-            <strong>1 booking</strong>
-            <i className="status live">ACTIVE</i>
           </div>
+          {loadingCustomers && (
+            <p className="all-clear">Loading registered customers from backend...</p>
+          )}
+          {!loadingCustomers && filteredCustomers.map((c) => {
+            const isSuspended = c.status === "suspended" || c.suspended;
+            const isOwnAdmin = c.id === currentUser?.id || c.id === "admin";
+            return (
+              <div className="management-row" key={c.id}>
+                <span>
+                  {c.name.slice(0, 2).toUpperCase()}
+                </span>
+                <div>
+                  <b>{c.name} {isOwnAdmin && <small>(You · Administrator)</small>}</b>
+                  <small>{c.email} · 📞 {c.phone || "No phone"} · {c.area || "Greater Accra"}</small>
+                </div>
+                <strong>
+                  {c.totalBookings} total ({c.completedBookingsCount} completed) · GH₵{c.grossSpendGhs} spend
+                </strong>
+                <div className="action-buttons-cell">
+                  <i className={`status ${isSuspended ? "suspended" : "live"}`}>
+                    {isSuspended ? "SUSPENDED" : "ACTIVE"}
+                  </i>
+                  {isOwnAdmin ? (
+                    <button disabled className="action-btn disabled" title="Cannot suspend own administrator account">
+                      Protected
+                    </button>
+                  ) : (
+                    <button
+                      className={`action-btn ${isSuspended ? "reactivate-btn" : "suspend-btn"}`}
+                      onClick={() => handleToggleCustomerSuspension(c)}
+                    >
+                      {isSuspended ? "Reactivate" : "Suspend"}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+          {!loadingCustomers && !filteredCustomers.length && (
+            <p className="all-clear">No customer accounts found.</p>
+          )}
         </section>
       ) : active === "Service categories" ? (
         <CategoryManagement
@@ -3521,6 +3849,7 @@ function AdminDashboard({
         <EmptyState title={active} go={go} />
       )}
 
+      {/* Provider Verification Modal */}
       {dialogProvider && (
         <Modal title="Provider verification" close={() => setDialogProvider(null)}>
           <div className="review-provider">
@@ -3565,6 +3894,119 @@ function AdminDashboard({
               Approve provider <Icon name="check" />
             </button>
           </div>
+        </Modal>
+      )}
+
+      {/* Booking Details & Audit History Modal */}
+      {selectedBookingForDetails && (
+        <Modal
+          title={`Booking ${selectedBookingForDetails.id} Audit & Details`}
+          close={() => setSelectedBookingForDetails(null)}
+        >
+          <div className="booking-modal-detail-grid">
+            <div className="booking-modal-detail-item">
+              <span>Customer</span>
+              <b>{selectedBookingForDetails.customerName}</b>
+              <small>{selectedBookingForDetails.customerPhone || "Phone unlisted"}</small>
+            </div>
+            <div className="booking-modal-detail-item">
+              <span>Provider</span>
+              <b>{selectedBookingForDetails.providerName || "Unassigned"}</b>
+            </div>
+            <div className="booking-modal-detail-item">
+              <span>Service</span>
+              <b>{selectedBookingForDetails.serviceName}</b>
+            </div>
+            <div className="booking-modal-detail-item">
+              <span>Total & Status</span>
+              <b>GH₵{selectedBookingForDetails.total} · <span className={`status ${selectedBookingForDetails.status}`}>{selectedBookingForDetails.status.toUpperCase()}</span></b>
+            </div>
+            <div className="booking-modal-detail-item">
+              <span>Scheduled Date & Time</span>
+              <b>{selectedBookingForDetails.date} at {selectedBookingForDetails.time}</b>
+            </div>
+            <div className="booking-modal-detail-item">
+              <span>Location</span>
+              <b>{selectedBookingForDetails.address}</b>
+            </div>
+          </div>
+
+          <div>
+            <span className="kicker">AUDIT TRAIL & STATUS HISTORY</span>
+            <table className="audit-table">
+              <thead>
+                <tr>
+                  <th>Timestamp</th>
+                  <th>Status</th>
+                  <th>Changed By</th>
+                  <th>Notes / Reason</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(selectedBookingForDetails.history || [
+                  {
+                    status: selectedBookingForDetails.status,
+                    changedAt: selectedBookingForDetails.createdAt || "Initial",
+                    changedBy: selectedBookingForDetails.customerName,
+                    notes: "Booking requested by customer",
+                  },
+                ]).map((h, idx) => (
+                  <tr key={idx}>
+                    <td><small>{h.changedAt}</small></td>
+                    <td><span className={`status ${h.status}`}>{h.status.toUpperCase()}</span></td>
+                    <td>{h.changedBy}</td>
+                    <td>{h.notes || "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="modal-actions">
+            <button className="primary-button" onClick={() => setSelectedBookingForDetails(null)}>
+              Close Details
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {/* Admin Cancellation Modal */}
+      {cancellingBooking && (
+        <Modal
+          title={`Cancel Booking #${cancellingBooking.id}`}
+          close={() => setCancellingBooking(null)}
+        >
+          <form onSubmit={handleConfirmAdminCancel}>
+            <div className="admin-cancel-warning">
+              <strong>⚠️ Administrative Cancellation</strong>
+              <p>
+                Cancelling this booking will permanently mark it as cancelled, notify both the customer ({cancellingBooking.customerName}) and provider ({cancellingBooking.providerName || "Assigned"}), and record your administrative reason in the audit history.
+              </p>
+            </div>
+
+            <div className="form-grid">
+              <label className="full">
+                Cancellation Reason (Required)
+                <textarea
+                  required
+                  rows={3}
+                  value={cancelReason}
+                  onChange={(e) => setCancelReason(e.target.value)}
+                  placeholder="State the administrative reason for cancellation (e.g. Service safety violation, customer/provider requested mediation, duplicate order)..."
+                  autoFocus
+                />
+              </label>
+            </div>
+
+            <div className="modal-actions">
+              <button type="button" onClick={() => setCancellingBooking(null)}>
+                Dismiss
+              </button>
+              <button type="submit" className="action-btn danger-btn">
+                Confirm Cancellation <Icon name="close" />
+              </button>
+            </div>
+          </form>
         </Modal>
       )}
     </DashboardShell>
@@ -4075,6 +4517,20 @@ export default function App() {
     api.getStats().then((res) => setStats(res.stats)).catch(() => {});
   };
 
+  const handleProviderSuspensionToggled = (providerId: string, suspended: boolean) => {
+    setProvidersList((prev) =>
+      prev.map((p) => (p.id === providerId ? { ...p, suspended } : p)),
+    );
+    api.getStats().then((res) => setStats(res.stats)).catch(() => {});
+  };
+
+  const handleBookingAdminCancelled = (bookingId: string, updatedBooking: Booking) => {
+    setBookingsList((prev) =>
+      prev.map((b) => (b.id === bookingId ? updatedBooking : b)),
+    );
+    api.getStats().then((res) => setStats(res.stats)).catch(() => {});
+  };
+
   const handleProviderUpdated = (updated: Provider) => {
     setProvidersList((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
     if (selectedProvider && selectedProvider.id === updated.id) {
@@ -4225,6 +4681,8 @@ export default function App() {
           onProviderVerified={handleProviderVerified}
           onCategoryUpdated={handleCategoryUpdated}
           onCategoryCreated={handleCategoryCreated}
+          onProviderSuspensionToggled={handleProviderSuspensionToggled}
+          onBookingAdminCancelled={handleBookingAdminCancelled}
           onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
           onLogout={handleLogout}
         />

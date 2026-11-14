@@ -535,6 +535,42 @@ class DataStore {
     this.save();
     return this.data.users[idx];
   }
+  getCustomersWithStats() {
+    const users = (this.data.users || []).filter(u => u.role === "customer");
+    const bookings = this.data.bookings || [];
+    return users.map(u => {
+      const userBookings = bookings.filter(b => b.customerId === u.id || b.customerName === u.name);
+      const completed = userBookings.filter(b => b.status === "completed");
+      const grossSpendGhs = completed.reduce((sum, b) => sum + (Number(b.total) || 0), 0);
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        phone: u.phone || "",
+        area: u.area || "",
+        address: u.address || "",
+        status: u.status || (u.suspended ? "suspended" : "active"),
+        suspended: Boolean(u.suspended || u.status === "suspended"),
+        totalBookings: userBookings.length,
+        completedBookingsCount: completed.length,
+        grossSpendGhs,
+        createdAt: u.createdAt || ""
+      };
+    });
+  }
+  updateCustomerStatus(id, status, reason = "") {
+    const u = this.getUserById(id);
+    if (!u) return { error: "Customer not found", statusCode: 404 };
+    if (u.role === "admin") {
+      return { error: "Cannot suspend or modify privileges of an administrator account.", statusCode: 403 };
+    }
+    const isSuspended = status === "suspended";
+    u.status = isSuspended ? "suspended" : "active";
+    u.suspended = isSuspended;
+    if (reason) u.suspensionReason = reason;
+    this.save();
+    return { ok: true, user: this.sanitizeUser(u) };
+  }
 
   // --- Sessions ---
   createSession(user) {
@@ -613,7 +649,14 @@ class DataStore {
   updateProviderStatus(id, status) {
     const p = this.getProviderById(id);
     if (!p) return null;
-    p.status = status; // approved, declined, suspended
+    p.status = status; // approved, declined, pending
+    this.save();
+    return p;
+  }
+  setProviderSuspended(id, suspended) {
+    const p = this.getProviderById(id);
+    if (!p) return null;
+    p.suspended = Boolean(suspended);
     this.save();
     return p;
   }
@@ -791,6 +834,62 @@ class DataStore {
     return { ok: true, booking: b };
   }
 
+  adminCancelBooking(bookingId, adminUser, reason) {
+    const b = this.getBookingById(bookingId);
+    if (!b) return { error: "Booking not found", statusCode: 404 };
+    if (b.status === "completed" || b.status === "cancelled") {
+      return { error: "Cannot cancel a booking that is already completed or cancelled.", statusCode: 400 };
+    }
+    const trimmedReason = String(reason || "").trim();
+    if (!trimmedReason) {
+      return { error: "Cancellation reason is required.", statusCode: 400 };
+    }
+    b.status = "cancelled";
+    b.responseNotes = `Cancelled by admin (${adminUser.name || adminUser.id}): ${trimmedReason}`;
+    b.history = b.history || [];
+    b.history.push({
+      status: "cancelled",
+      action: "admin_cancellation",
+      changedAt: new Date().toISOString(),
+      changedBy: adminUser.id,
+      adminName: adminUser.name || "Administrator",
+      reason: trimmedReason
+    });
+    this.save();
+
+    this.addNotification(
+      b.customerId,
+      b.id,
+      "booking_cancelled",
+      `Your booking ${b.id} was cancelled by administrator. Reason: ${trimmedReason}`
+    );
+    if (b.providerId) {
+      this.addNotification(
+        b.providerId,
+        b.id,
+        "booking_cancelled",
+        `Booking ${b.id} was cancelled by administrator. Reason: ${trimmedReason}`
+      );
+    }
+    return { ok: true, booking: b };
+  }
+
+  addNotification(recipientId, bookingId, type, message) {
+    this.data.notifications = this.data.notifications || [];
+    const notif = {
+      id: "notif-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 6),
+      recipientId,
+      booking_id: bookingId,
+      type,
+      message,
+      read: false,
+      created_at: new Date().toISOString()
+    };
+    this.data.notifications.push(notif);
+    this.save();
+    return notif;
+  }
+
   // --- Categories ---
   getCategories() { return this.data.categories || []; }
   createCategory(cat) {
@@ -802,11 +901,31 @@ class DataStore {
     return newCat;
   }
   updateCategory(id, updates) {
+    const CORE_CATEGORY_IDS = [
+      "plumbing", "electrical", "carpentry", "painting", "masonry",
+      "cleaning", "appliances", "hvac", "assembly"
+    ];
     const cat = (this.data.categories || []).find(c => c.id === id);
     if (!cat) return null;
+    if (CORE_CATEGORY_IDS.includes(String(id).toLowerCase()) && updates.active === false) {
+      return null;
+    }
     Object.assign(cat, updates);
     this.save();
     return cat;
+  }
+  deleteCategory(id) {
+    const CORE_CATEGORY_IDS = [
+      "plumbing", "electrical", "carpentry", "painting", "masonry",
+      "cleaning", "appliances", "hvac", "assembly"
+    ];
+    if (CORE_CATEGORY_IDS.includes(String(id).toLowerCase())) {
+      return { error: "The 9 core MVP service categories cannot be deleted.", statusCode: 400 };
+    }
+    const beforeLen = (this.data.categories || []).length;
+    this.data.categories = (this.data.categories || []).filter(c => c.id !== id);
+    this.save();
+    return { ok: true, deleted: (this.data.categories || []).length < beforeLen };
   }
 
   // --- Reviews & Ratings (FR-12) ---

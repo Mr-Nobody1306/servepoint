@@ -173,8 +173,25 @@ async function handleApiRequest(req, res, pathname, config) {
     }
     const providerId = decodeURIComponent(verifyMatch[1]);
     const body = await readJsonBody(req);
-    const status = body.status || "approved"; // approved, declined, suspended
+    let status = body.status || "approved";
+    if (status !== "approved" && status !== "declined" && status !== "pending") {
+      status = "approved";
+    }
     const updated = dataStore.updateProviderStatus(providerId, status);
+    if (!updated) return sendJson(res, 404, { error: "Provider not found" });
+    return sendJson(res, 200, { ok: true, provider: updated });
+  }
+
+  const suspendMatch = pathname.match(/^\/api\/providers\/([^/]+)\/suspend$/);
+  if (suspendMatch && method === "POST") {
+    const authUser = parseAuth(req);
+    if (!authUser || authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: Administrator privileges required to manage provider suspension." });
+    }
+    const providerId = decodeURIComponent(suspendMatch[1]);
+    const body = await readJsonBody(req);
+    const suspended = body.suspended !== undefined ? Boolean(body.suspended) : true;
+    const updated = dataStore.setProviderSuspended(providerId, suspended);
     if (!updated) return sendJson(res, 404, { error: "Provider not found" });
     return sendJson(res, 200, { ok: true, provider: updated });
   }
@@ -272,6 +289,12 @@ async function handleApiRequest(req, res, pathname, config) {
       return sendJson(res, 401, { error: "Authentication required to book a service. Please sign in." });
     }
 
+    // Customer suspension guard
+    const customerUser = dataStore.getUserById(authUser.id);
+    if (customerUser && (customerUser.status === "suspended" || customerUser.suspended)) {
+      return sendJson(res, 403, { error: "Account suspended: You cannot create new bookings while your account is suspended. Please contact support." });
+    }
+
     const body = await readJsonBody(req);
     const providerId = String(body.providerId || "").trim();
     if (!providerId) {
@@ -280,6 +303,11 @@ async function handleApiRequest(req, res, pathname, config) {
     const provider = dataStore.getProviderById(providerId);
     if (!provider) {
       return sendJson(res, 404, { error: "Service provider not found." });
+    }
+
+    // Provider suspension guard
+    if (provider.suspended) {
+      return sendJson(res, 400, { error: "This service provider is currently suspended and cannot receive new service requests." });
     }
 
     const serviceName = String(body.serviceName || "").trim();
@@ -548,9 +576,88 @@ async function handleApiRequest(req, res, pathname, config) {
     }
     const catId = decodeURIComponent(catItemMatch[1]);
     const body = await readJsonBody(req);
+    const CORE_CATEGORY_IDS = [
+      "plumbing", "electrical", "carpentry", "painting", "masonry",
+      "cleaning", "appliances", "hvac", "assembly"
+    ];
+    if (CORE_CATEGORY_IDS.includes(String(catId).toLowerCase()) && body.active === false) {
+      return sendJson(res, 400, { error: "The 9 core MVP service categories cannot be deactivated." });
+    }
     const updated = dataStore.updateCategory(catId, body);
     if (!updated) return sendJson(res, 404, { error: "Category not found." });
     return sendJson(res, 200, { ok: true, category: updated });
+  }
+
+  if (catItemMatch && method === "DELETE") {
+    const authUser = parseAuth(req);
+    if (!authUser || authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: Administrator privileges required to manage categories." });
+    }
+    const catId = decodeURIComponent(catItemMatch[1]);
+    const result = dataStore.deleteCategory(catId);
+    if (result && result.error) return sendJson(res, result.statusCode || 400, { error: result.error });
+    return sendJson(res, 200, result);
+  }
+
+  // --- Admin Customer Management ---
+  if (pathname === "/api/admin/customers" && method === "GET") {
+    const authUser = parseAuth(req);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required." });
+    }
+    if (authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: Administrator privileges required." });
+    }
+    const customers = dataStore.getCustomersWithStats();
+    return sendJson(res, 200, { ok: true, customers });
+  }
+
+  const customerStatusMatch = pathname.match(/^\/api\/admin\/customers\/([^/]+)\/status$/);
+  if (customerStatusMatch && (method === "PUT" || method === "POST")) {
+    const authUser = parseAuth(req);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required." });
+    }
+    if (authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: Administrator privileges required." });
+    }
+    const targetCustomerId = decodeURIComponent(customerStatusMatch[1]);
+    if (authUser.id === targetCustomerId) {
+      return sendJson(res, 403, { error: "Administrators cannot suspend their own admin account." });
+    }
+    const body = await readJsonBody(req);
+    const status = String(body.status || "active").toLowerCase().trim();
+    if (status !== "active" && status !== "suspended") {
+      return sendJson(res, 400, { error: "Invalid status: must be 'active' or 'suspended'." });
+    }
+    const result = dataStore.updateCustomerStatus(targetCustomerId, status, body.reason);
+    if (result.error) {
+      return sendJson(res, result.statusCode || 400, { error: result.error });
+    }
+    return sendJson(res, 200, result);
+  }
+
+  // --- Admin Booking Interventions ---
+  const adminCancelMatch = pathname.match(/^\/api\/admin\/bookings\/([^/]+)\/cancel$/);
+  if (adminCancelMatch && method === "POST") {
+    const authUser = parseAuth(req);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required." });
+    }
+    if (authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: Administrator privileges required to administratively cancel bookings." });
+    }
+    const bookingId = decodeURIComponent(adminCancelMatch[1]);
+    const body = await readJsonBody(req);
+    const reason = String(body.reason || "").trim();
+    if (!reason) {
+      return sendJson(res, 400, { error: "A non-empty cancellation reason is required." });
+    }
+    const result = dataStore.adminCancelBooking(bookingId, authUser, reason);
+    if (result.error) {
+      return sendJson(res, result.statusCode || 400, { error: result.error });
+    }
+    return sendJson(res, 200, result);
   }
 
   // --- Stats / Admin Dashboard ---
