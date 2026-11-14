@@ -51,6 +51,15 @@ describe("Phase 4: Booking System & Status Tracking", function () {
       );
       dataStore.save();
     }
+    const c = dataStore.getUserById("ama");
+    if (c) {
+      c.status = "active";
+      c.suspended = false;
+    }
+    const p = dataStore.getProviderById("kwame");
+    if (p) {
+      p.suspended = false;
+    }
   });
 
   // Ensure seed users

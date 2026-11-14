@@ -53,6 +53,29 @@ function mockRes() {
 }
 
 describe("Phase 6: Admin Operations (FR-13 & FR-14)", function () {
+  t.beforeEach(() => {
+    const customer = dataStore.getUserById("ama");
+    if (customer) {
+      customer.status = "active";
+      customer.suspended = false;
+    }
+    const kwame = dataStore.getProviderById("kwame");
+    if (kwame) {
+      kwame.suspended = false;
+    }
+  });
+
+  t.after(() => {
+    const customer = dataStore.getUserById("ama");
+    if (customer) {
+      customer.status = "active";
+      customer.suspended = false;
+    }
+    const kwame = dataStore.getProviderById("kwame");
+    if (kwame) {
+      kwame.suspended = false;
+    }
+  });
   const adminUser = dataStore.getUserById("admin") || dataStore.createUser({
     id: "admin",
     name: "ServePoint Admin",
