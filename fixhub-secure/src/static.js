@@ -28,7 +28,7 @@ function contentSecurityPolicy() {
     + " style-src 'self' https://fonts.googleapis.com https://paystack.com;"
     + " style-src-attr 'unsafe-inline';"
     + " font-src 'self' https://fonts.gstatic.com;"
-    + " img-src 'self' data: blob:;"
+    + " img-src 'self' data: blob: https://images.unsplash.com;"
     + " media-src 'self' blob:;"
     + " connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net https://get.geojs.io https://js.paystack.co https://api.paystack.co;"
     + " frame-src 'self' https://js.paystack.co https://checkout.paystack.com;"
@@ -69,7 +69,23 @@ function serveStatic(req, res, publicDir, pathname) {
   catch (e) { res.writeHead(400, securityHeaders()); return res.end("Bad request"); }
   if (file !== publicDir && file.indexOf(publicDir + path.sep) !== 0) { res.writeHead(403, securityHeaders()); return res.end("Forbidden"); }
   fs.stat(file, function (err, st) {
-    if (err || !st.isFile()) { res.writeHead(404, securityHeaders()); return res.end("Not found"); }
+    if (err || !st.isFile()) {
+      if (!path.extname(pathname)) {
+        const indexFile = path.join(publicDir, "index.html");
+        return fs.stat(indexFile, (err2, st2) => {
+          if (!err2 && st2.isFile()) {
+            const headers = securityHeaders();
+            headers["Content-Type"] = "text/html; charset=utf-8";
+            res.writeHead(200, headers);
+            return fs.createReadStream(indexFile).pipe(res);
+          }
+          res.writeHead(404, securityHeaders());
+          return res.end("Not found");
+        });
+      }
+      res.writeHead(404, securityHeaders());
+      return res.end("Not found");
+    }
     const type = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
     const headers = securityHeaders();
     headers["Content-Type"] = type;

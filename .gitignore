@@ -1,0 +1,17 @@
+# Environment & secrets
+.env
+.env*.local
+
+# Logs
+*.log
+npm-debug.log*
+
+# Runtime data & session store
+fixhub-secure/src/data/
+**/src/data/store.json
+
+# Dependencies & build outputs
+**/node_modules/
+**/dist/
+frontend/dist/
+frontend/node_modules/

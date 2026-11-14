@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ServePoint — Good help for the home you love</title>
+    <!-- Paystack Checkout CDN -->
+    <script src="https://js.paystack.co/v1/inline.js"></script><!-- Access-Control-Allow-Origin: Paystack CDN does not send ACAO, preventing SRI -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- Architectural compatibility markers -->
+    <div id="sidenav" hidden>
+      <div id="navScrim"></div>
+      <div id="catGrid" class="sp-homegrid"></div>
+      <input id="homeSearch" type="hidden" />
+      <input id="homeLoc" type="hidden" />
+      <a data-goto="home"></a>
+      <a data-goto="services"></a>
+      <a data-goto="history"></a>
+      <a data-goto="diag"></a>
+      <a data-goto="account"></a>
+      <a data-goto="privacy"></a>
+      <a data-goto="admin"></a>
+    </div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

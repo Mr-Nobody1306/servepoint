@@ -1,7 +1,8 @@
 /* ServePoint public settings — safe to ship. These three keys are PUBLIC BY
    DESIGN (Supabase anon + Paystack public key are enforced server-side by
    RLS / dashboard settings). The Groq key is NOT here — it lives in the
-   server's .env and the browser never sees it. Fill in the placeholders. */
+   server's .env and the browser never sees it. Fill in the placeholders.
+   Template default: PASTE_YOUR_SUPABASE_URL_HERE */
 window.FIXHUB_CONFIG = {
   supabaseUrl: "https://acslkbrlxpjnsqrcgnou.supabase.co",
   supabaseAnonKey: "sb_publishable_m4t_Lf7c0lpMU9fqVrrKDA_cH715vsO",

@@ -8,6 +8,7 @@ const { createRateLimiter } = require("./src/rateLimit");
 const { serveStatic, sendJson, securityHeaders, configureHeaders } = require("./src/static");
 const { handleChat } = require("./src/chat");
 const { handleWebhook, handleBanks, handleRecipient, handleCompletion, handleBookingStatus, handlePaymentStatus } = require("./src/paystack");
+const { handleApiRequest } = require("./src/apiRoutes");
 configureHeaders(config);
 const limiter = createRateLimiter({ windowMs: 60 * 1000, max: config.chatMaxPerMin });
 function onRequest(req, res) {
@@ -83,7 +84,14 @@ function onRequest(req, res) {
     });
     return;
   }
-  if (pathname.startsWith("/api/")) return sendJson(res, 404, { error: "Unknown API." });
+  if (pathname.startsWith("/api/")) {
+    Promise.resolve(handleApiRequest(req, res, pathname, config)).catch((err) => {
+      console.error("[api] unhandled:", err && err.message);
+      if (!res.headersSent) sendJson(res, 500, { error: "Internal API error." });
+      else { try { res.end(); } catch (e) {} }
+    });
+    return;
+  }
   if (req.method !== "GET") { res.writeHead(405, securityHeaders()); return res.end("Method not allowed"); }
   return serveStatic(req, res, config.publicDir, pathname);
 }
