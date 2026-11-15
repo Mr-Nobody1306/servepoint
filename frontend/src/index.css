@@ -24,11 +24,15 @@
 }
 html {
   scroll-behavior: smooth;
+  overflow-x: hidden;
+  width: 100%;
 }
 body {
   margin: 0;
   min-width: 320px;
   background: var(--ivory);
+  overflow-x: hidden;
+  width: 100%;
 }
 button,
 input,
@@ -1504,6 +1508,20 @@ footer > div > span {
   border-right: 1px solid var(--line);
   z-index: 20;
 }
+.dash-aside-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.dash-aside-close {
+  display: none;
+}
+.dash-drawer-backdrop {
+  display: none;
+}
+.dash-platform-nav {
+  display: none;
+}
 .workspace-label {
   font-size: 8px;
   letter-spacing: 0.18em;
@@ -2504,17 +2522,41 @@ footer > div > span {
     font-size: 15px;
   }
   .eyebrow {
+    gap: 10px;
     margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .eyebrow-line {
+    width: 22px;
+  }
+  .eyebrow-label {
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
   }
   .nav-rule {
     height: 1px;
     width: 100%;
   }
   .hero {
-    padding: 55px 20px 70px;
+    padding: 50px 20px 65px;
+    overflow-x: hidden;
   }
   .hero h1 {
-    font-size: 53px;
+    font-size: clamp(38px, 9.2vw, 52px);
+    line-height: 1.08;
+    letter-spacing: -0.035em;
+    margin-top: 0;
+    margin-bottom: 22px;
+    word-break: break-word;
+  }
+  .hero h1 br {
+    display: none;
+  }
+  .hero-ai-btn {
+    max-width: 100%;
+    white-space: normal;
+    font-size: 12px;
+    padding: 10px 14px;
   }
   .hero-search {
     height: auto;
@@ -2718,27 +2760,84 @@ footer > div > span {
   }
   .dashboard-shell > aside {
     position: fixed;
-    left: -270px;
-    width: 250px;
-    transition: 0.25s;
+    top: 0;
+    bottom: 0;
+    left: -280px;
+    width: 260px;
+    height: 100vh;
+    overflow-y: auto;
+    transition: left 0.25s ease;
+    z-index: 120;
   }
   .dashboard-shell > aside.open {
     left: 0;
-    box-shadow: 20px 0 50px #0005;
+    box-shadow: 20px 0 50px rgba(0, 0, 0, 0.4);
+  }
+  .dash-aside-close {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  .pro-shell .dash-aside-close,
+  .admin-shell .dash-aside-close {
+    border-color: #383832;
+    color: #d9d2c4;
+  }
+  .dash-drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    backdrop-filter: blur(2px);
+    z-index: 110;
+  }
+  .dash-platform-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 15px 12px;
+    border-top: 1px solid var(--line);
+  }
+  .dash-platform-nav small {
+    font-size: 7px;
+    letter-spacing: 0.15em;
+    display: block;
+    margin-bottom: 8px;
+    color: #76756d;
+  }
+  .dash-platform-nav button {
+    height: 38px;
+    border: 0;
+    background: none;
+    display: flex;
+    align-items: center;
+    gap: 13px;
+    padding: 0 12px;
+    text-align: left;
+    font-size: 11px;
+    color: inherit;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .dash-platform-nav button:hover {
+    background: rgba(0, 0, 0, 0.05);
+  }
+  .pro-shell .dash-platform-nav button:hover,
+  .admin-shell .dash-platform-nav button:hover {
+    background: rgba(255, 255, 255, 0.08);
   }
   .dashboard-main {
     padding: 25px 16px;
   }
   .mobile-dashbar {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 40px;
-  }
-  .mobile-dashbar button {
-    border: 0;
-    background: none;
-    color: inherit;
+    display: none !important;
   }
   .dash-welcome {
     align-items: flex-start;
@@ -3559,4 +3658,37 @@ footer > div > span {
   cursor: pointer;
   text-decoration: underline;
   padding: 4px;
+}
+
+@media (max-width: 360px) {
+  .hero {
+    padding: 40px 16px 55px;
+  }
+  .eyebrow {
+    gap: 8px;
+    margin-bottom: 22px;
+  }
+  .eyebrow-line {
+    width: 18px;
+  }
+  .eyebrow-label {
+    font-size: 9.5px;
+    letter-spacing: 0.1em;
+  }
+  .hero h1 {
+    font-size: 34px;
+    line-height: 1.1;
+    margin-bottom: 18px;
+  }
+  .hero-copy > p {
+    font-size: 14px;
+    margin-bottom: 22px;
+  }
+  .hero-search {
+    padding: 12px;
+  }
+  .hero-ai-btn {
+    font-size: 11px;
+    padding: 8px 12px;
+  }
 }

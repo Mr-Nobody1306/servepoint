@@ -362,24 +362,41 @@ function Header({
   onOpenAuth,
   onLogout,
   onOpenContact,
+  isDashboard = false,
+  isDashboardNavOpen = false,
+  onToggleDashboardNav,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
   onOpenAuth: () => void;
   onLogout?: () => void;
   onOpenContact?: () => void;
+  isDashboard?: boolean;
+  isDashboardNavOpen?: boolean;
+  onToggleDashboardNav?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const initials = currentUser
     ? currentUser.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
     : "AM";
+  const isOpen = isDashboard ? isDashboardNavOpen : open;
   return (
     <header className="site-header">
       <Logo />
-      <button className="menu-button" onClick={() => setOpen(!open)} aria-label="Toggle menu">
-        <Icon name={open ? "close" : "menu"} />
+      <button
+        className="menu-button"
+        onClick={() => {
+          if (isDashboard && onToggleDashboardNav) {
+            onToggleDashboardNav();
+          } else {
+            setOpen(!open);
+          }
+        }}
+        aria-label="Toggle menu"
+      >
+        <Icon name={isOpen ? "close" : "menu"} />
       </button>
-      <nav className={open ? "nav-open" : ""}>
+      <nav className={!isDashboard && open ? "nav-open" : ""}>
         <button
           onClick={() => {
             go("home");
@@ -514,9 +531,9 @@ function Home({
               <span className="eyebrow-label">SERVEPOINT · GREATER ACCRA</span>
             </div>
             <h1>
-              Good help
+              Good help{" "}
               <br />
-              for the home
+              for the home{" "}
               <br />
               <em>you love.</em>
             </h1>
@@ -1822,6 +1839,9 @@ function CustomerDashboard({
   onBookingStatusUpdated,
   onReviewSubmitted,
   onUserUpdated,
+  onOpenContact,
+  mobileNav,
+  setMobileNav,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
@@ -1832,6 +1852,9 @@ function CustomerDashboard({
   onBookingStatusUpdated?: (bookingId: string, status: any) => void;
   onReviewSubmitted?: (review: Review, providerRating?: number) => void;
   onUserUpdated?: (user: User) => void;
+  onOpenContact?: () => void;
+  mobileNav?: boolean;
+  setMobileNav?: (open: boolean) => void;
 }) {
   const [active, setActive] = useState("Overview");
   const [toast, setToast] = useState("");
@@ -1951,6 +1974,9 @@ function CustomerDashboard({
       currentUser={currentUser}
       onOpenAuth={onOpenAuth}
       onLogout={onLogout}
+      onOpenContact={onOpenContact}
+      mobileNav={mobileNav}
+      setMobileNav={setMobileNav}
     >
       {toast && (
         <div className="toast">
@@ -2295,6 +2321,9 @@ function DashboardShell({
   currentUser,
   onOpenAuth,
   onLogout,
+  onOpenContact,
+  mobileNav = false,
+  setMobileNav,
   children,
 }: {
   kind: "customer" | "pro" | "admin";
@@ -2306,9 +2335,18 @@ function DashboardShell({
   currentUser?: User | null;
   onOpenAuth?: () => void;
   onLogout?: () => void;
+  onOpenContact?: () => void;
+  mobileNav?: boolean;
+  setMobileNav?: (open: boolean) => void;
   children: React.ReactNode;
 }) {
-  const [mobileNav, setMobileNav] = useState(false);
+  const [internalMobileNav, setInternalMobileNav] = useState(false);
+  const isNavOpen = setMobileNav !== undefined ? mobileNav : internalMobileNav;
+  const closeNav = () => {
+    if (setMobileNav) setMobileNav(false);
+    else setInternalMobileNav(false);
+  };
+
   const initials = currentUser
     ? currentUser.name.split(" ").map((w) => w[0]).join("").slice(0, 2).toUpperCase()
     : kind === "pro" ? "KO" : kind === "admin" ? "AD" : "AM";
@@ -2316,8 +2354,14 @@ function DashboardShell({
 
   return (
     <main className={`dashboard-shell ${kind}-shell`}>
-      <aside className={mobileNav ? "open" : ""}>
-        <Logo light={kind !== "customer"} />
+      {isNavOpen && <div className="dash-drawer-backdrop" onClick={closeNav} />}
+      <aside className={isNavOpen ? "open" : ""}>
+        <div className="dash-aside-top">
+          <Logo light={kind !== "customer"} />
+          <button className="dash-aside-close" onClick={closeNav} aria-label="Close navigation drawer">
+            <Icon name="close" />
+          </button>
+        </div>
         <div className="workspace-label">{title}</div>
         <nav>
           {items.map((item, i) => (
@@ -2325,7 +2369,7 @@ function DashboardShell({
               className={active === item ? "active" : ""}
               onClick={() => {
                 setActive(item);
-                setMobileNav(false);
+                closeNav();
               }}
               key={item}
             >
@@ -2340,19 +2384,40 @@ function DashboardShell({
             </button>
           ))}
         </nav>
+        <div className="dash-platform-nav">
+          <small>PLATFORM NAVIGATION</small>
+          <button onClick={() => { closeNav(); go("home"); }}>
+            <Icon name="home" /> Home
+          </button>
+          <button onClick={() => { closeNav(); go("explore"); }}>
+            <Icon name="grid" /> Browse Services
+          </button>
+          <button onClick={() => {
+            closeNav();
+            go("home");
+            setTimeout(() => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" }), 100);
+          }}>
+            <Icon name="clock" /> How It Works
+          </button>
+          {onOpenContact && (
+            <button onClick={() => { closeNav(); onOpenContact(); }}>
+              <Icon name="message" /> Contact / Support
+            </button>
+          )}
+        </div>
         <div className="role-switch">
           <small>CURRENT SESSION</small>
           <div style={{ color: kind !== "customer" ? "#d9d2c4" : "#242521", fontSize: "11px", margin: "4px 0", fontWeight: 600 }}>
             {currentUser ? `${currentUser.name} (${(currentUser.role || "customer").toUpperCase()})` : "Guest Browsing"}
           </div>
           {onOpenAuth && (
-            <button onClick={onOpenAuth} style={{ fontSize: "11px" }}>Switch account</button>
+            <button onClick={() => { closeNav(); onOpenAuth(); }} style={{ fontSize: "11px" }}>Switch account</button>
           )}
           {onLogout && currentUser && (
-            <button onClick={onLogout} style={{ fontSize: "11px", color: "#c57656" }}>Sign out</button>
+            <button onClick={() => { closeNav(); onLogout(); }} style={{ fontSize: "11px", color: "#c57656" }}>Sign out</button>
           )}
         </div>
-        <button className="dash-profile" onClick={onOpenAuth}>
+        <button className="dash-profile" onClick={() => { closeNav(); onOpenAuth?.(); }}>
           <span>{initials}</span>
           <div>
             <b>{displayName}</b>
@@ -2362,12 +2427,6 @@ function DashboardShell({
         </button>
       </aside>
       <div className="dashboard-main">
-        <div className="mobile-dashbar">
-          <Logo light={kind !== "customer"} />
-          <button onClick={() => setMobileNav(!mobileNav)}>
-            <Icon name="menu" />
-          </button>
-        </div>
         {children}
       </div>
     </main>
@@ -2384,6 +2443,9 @@ function ProDashboard({
   onProviderUpdated,
   onOpenAuth,
   onLogout,
+  onOpenContact,
+  mobileNav,
+  setMobileNav,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
@@ -2394,6 +2456,9 @@ function ProDashboard({
   onProviderUpdated: (updated: Provider) => void;
   onOpenAuth?: () => void;
   onLogout?: () => void;
+  onOpenContact?: () => void;
+  mobileNav?: boolean;
+  setMobileNav?: (open: boolean) => void;
 }) {
   const [active, setActive] = useState("Overview");
   const [modal, setModal] = useState(false);
@@ -2681,6 +2746,9 @@ function ProDashboard({
       currentUser={currentUser}
       onOpenAuth={onOpenAuth}
       onLogout={onLogout}
+      onOpenContact={onOpenContact}
+      mobileNav={mobileNav}
+      setMobileNav={setMobileNav}
     >
       {toast && (
         <div className="toast">
@@ -3765,6 +3833,9 @@ function AdminDashboard({
   onBookingAdminCancelled,
   onOpenAuth,
   onLogout,
+  onOpenContact,
+  mobileNav,
+  setMobileNav,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
@@ -3779,6 +3850,9 @@ function AdminDashboard({
   onBookingAdminCancelled?: (bookingId: string, updatedBooking: Booking) => void;
   onOpenAuth?: () => void;
   onLogout?: () => void;
+  onOpenContact?: () => void;
+  mobileNav?: boolean;
+  setMobileNav?: (open: boolean) => void;
 }) {
   const [active, setActive] = useState("Platform overview");
   const [dialogProvider, setDialogProvider] = useState<Provider | null>(null);
@@ -3989,6 +4063,9 @@ function AdminDashboard({
       currentUser={currentUser}
       onOpenAuth={onOpenAuth}
       onLogout={onLogout}
+      onOpenContact={onOpenContact}
+      mobileNav={mobileNav}
+      setMobileNav={setMobileNav}
     >
       {toast && (
         <div className="toast">
@@ -5313,8 +5390,10 @@ export default function App() {
   const [onboardArea, setOnboardArea] = useState("Accra");
   const [onboardPrice, setOnboardPrice] = useState("350");
   const [onboardBio, setOnboardBio] = useState("");
+  const [mobileDashboardNavOpen, setMobileDashboardNavOpen] = useState(false);
 
   const go = (next: View) => {
+    setMobileDashboardNavOpen(false);
     const activeUser = currentUserRef.current;
     // Role-based access control guards
     if (next === "admin") {
@@ -5366,7 +5445,7 @@ export default function App() {
       const viewParam = urlParams.get("view")?.toLowerCase();
       const target = (rawHash || viewParam || "") as View;
       const validViews: View[] = ["home", "explore", "provider", "booking", "customer", "pro", "admin"];
-      if (validViews.includes(target) && target !== "home") {
+      if (validViews.includes(target)) {
         go(target);
       }
     };
@@ -5559,6 +5638,8 @@ export default function App() {
     }
   };
 
+  const isDashboard = view === "customer" || view === "pro" || view === "admin";
+
   return (
     <>
       <Header
@@ -5567,6 +5648,9 @@ export default function App() {
         onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
         onLogout={handleLogout}
         onOpenContact={() => setContactModalOpen(true)}
+        isDashboard={isDashboard}
+        isDashboardNavOpen={mobileDashboardNavOpen}
+        onToggleDashboardNav={() => setMobileDashboardNavOpen((prev) => !prev)}
       />
 
       {view === "home" ? (
@@ -5615,6 +5699,9 @@ export default function App() {
           onBookingStatusUpdated={handleBookingStatusUpdated}
           onReviewSubmitted={handleReviewSubmitted}
           onUserUpdated={(u) => setCurrentUser(u)}
+          onOpenContact={() => setContactModalOpen(true)}
+          mobileNav={mobileDashboardNavOpen}
+          setMobileNav={setMobileDashboardNavOpen}
         />
       ) : view === "pro" && currentUser && (currentUser.role === "artisan" || currentUser.role === "provider" || currentUser.role === "admin") ? (
         <ProDashboard
@@ -5627,6 +5714,9 @@ export default function App() {
           onProviderUpdated={handleProviderUpdated}
           onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
           onLogout={handleLogout}
+          onOpenContact={() => setContactModalOpen(true)}
+          mobileNav={mobileDashboardNavOpen}
+          setMobileNav={setMobileDashboardNavOpen}
         />
       ) : view === "admin" && currentUser && currentUser.role === "admin" ? (
         <AdminDashboard
@@ -5643,6 +5733,9 @@ export default function App() {
           onBookingAdminCancelled={handleBookingAdminCancelled}
           onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
           onLogout={handleLogout}
+          onOpenContact={() => setContactModalOpen(true)}
+          mobileNav={mobileDashboardNavOpen}
+          setMobileNav={setMobileDashboardNavOpen}
         />
       ) : (
         <Home
