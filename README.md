@@ -1,7 +1,5 @@
 # ServePoint
 
-### Your home, taken care of.
-
 ServePoint is a multi-service booking platform designed to make finding and booking reliable home maintenance professionals easier. It connects customers with service providers through a simple, accessible platform where users can explore services, compare providers, make bookings and manage their service requests.
 
 Built with the Ghanaian market in mind, ServePoint aims to simplify access to essential home maintenance services while giving service providers a platform to showcase their skills and manage their work.
