@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { api, type AdminCustomer, type Booking, type Category, type PlatformStats, type Provider, type ProviderService, type Review, type User } from "./api";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { api, type AdminCustomer, type Booking, type Category, type ChatMessage, type ChatResponse, type PlatformStats, type Provider, type ProviderService, type Review, type User } from "./api";
 
 type View = "home" | "explore" | "provider" | "booking" | "customer" | "pro" | "admin";
 type IconName =
@@ -361,11 +361,13 @@ function Header({
   currentUser,
   onOpenAuth,
   onLogout,
+  onOpenContact,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
   onOpenAuth: () => void;
   onLogout?: () => void;
+  onOpenContact?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const initials = currentUser
@@ -380,39 +382,77 @@ function Header({
       <nav className={open ? "nav-open" : ""}>
         <button
           onClick={() => {
+            go("home");
+            setOpen(false);
+          }}
+        >
+          Home
+        </button>
+        <button
+          onClick={() => {
             go("explore");
             setOpen(false);
           }}
         >
-          Find services
-        </button>
-        <button
-          onClick={() => {
-            go("provider");
-            setOpen(false);
-          }}
-        >
-          Our professionals
+          Browse Services
         </button>
         <button
           onClick={() => {
             go("home");
+            setOpen(false);
             setTimeout(
               () => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" }),
               100,
             );
           }}
         >
-          How it works
+          How It Works
         </button>
+        <button
+          onClick={() => {
+            setOpen(false);
+            onOpenContact?.();
+          }}
+        >
+          Contact / Support
+        </button>
+
+        {currentUser?.role === "admin" ? (
+          <button
+            onClick={() => {
+              go("admin");
+              setOpen(false);
+            }}
+          >
+            Admin Control Room
+          </button>
+        ) : currentUser?.role === "artisan" || currentUser?.role === "provider" ? (
+          <button
+            onClick={() => {
+              go("pro");
+              setOpen(false);
+            }}
+          >
+            Provider Studio
+          </button>
+        ) : currentUser ? (
+          <button
+            onClick={() => {
+              go("customer");
+              setOpen(false);
+            }}
+          >
+            My Dashboard
+          </button>
+        ) : null}
+
         <span className="nav-rule" />
-        <button onClick={() => go("pro")}>Provider view</button>
-        <button onClick={() => go("admin")}>Admin view</button>
         {currentUser ? (
           <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
             <button
               className="account-pill"
               onClick={() => {
+                setOpen(false);
                 if (currentUser.role === "admin") go("admin");
                 else if (currentUser.role === "artisan" || currentUser.role === "provider") go("pro");
                 else go("customer");
@@ -423,7 +463,10 @@ function Header({
             {onLogout && (
               <button
                 type="button"
-                onClick={onLogout}
+                onClick={() => {
+                  setOpen(false);
+                  onLogout();
+                }}
                 style={{ border: 0, background: "none", color: "#8a8984", fontSize: "12px", cursor: "pointer", padding: "4px" }}
               >
                 Sign out
@@ -431,7 +474,13 @@ function Header({
             )}
           </div>
         ) : (
-          <button className="account-pill" onClick={onOpenAuth}>
+          <button
+            className="account-pill"
+            onClick={() => {
+              setOpen(false);
+              onOpenAuth();
+            }}
+          >
             <span>＋</span> Sign In / Join
           </button>
         )}
@@ -444,10 +493,12 @@ function Home({
   go,
   providersList,
   onSelectProvider,
+  onOpenAi,
 }: {
   go: (v: View) => void;
   providersList: Provider[];
   onSelectProvider: (p: Provider) => void;
+  onOpenAi: () => void;
 }) {
   const [query, setQuery] = useState("");
   const kwame = providersList.find((p) => p.id === "kwame") || providersList[1] || providersList[0];
@@ -459,8 +510,8 @@ function Home({
         <section className="hero">
           <div className="hero-copy">
             <div className="eyebrow">
-              <span />
-              <span>SERVEPOINT · GREATER ACCRA</span>
+              <span className="eyebrow-line" />
+              <span className="eyebrow-label">SERVEPOINT · GREATER ACCRA</span>
             </div>
             <h1>
               Good help
@@ -485,6 +536,15 @@ function Home({
               </label>
               <button onClick={() => go("explore")}>
                 Find a pro <Icon name="arrow" />
+              </button>
+            </div>
+            <div className="hero-ai-action">
+              <button
+                type="button"
+                className="hero-ai-btn"
+                onClick={onOpenAi}
+              >
+                <span className="hero-ai-sparkle">✦</span> Describe your home problem with AI &rarr;
               </button>
             </div>
             <div className="popular">
@@ -699,21 +759,44 @@ function Explore({
   providersList,
   categoriesList,
   onSelectProvider,
+  onOpenAi,
 }: {
   go: (v: View) => void;
   providersList: Provider[];
   categoriesList?: Category[];
   onSelectProvider: (p: Provider) => void;
+  onOpenAi?: () => void;
 }) {
   const [category, setCategory] = useState("All home services");
+  const [minRating, setMinRating] = useState<number>(0);
+  const [selectedArea, setSelectedArea] = useState<string>("All areas");
   const [need, setNeed] = useState("Something is broken");
   const [saved, setSaved] = useState<string[]>([]);
   const [query, setQuery] = useState("");
 
   const approvedOnly = useMemo(
-    () => providersList.filter((p) => p.status === "approved"),
+    () => providersList.filter((p) => p.status === "approved" && !p.suspended),
     [providersList],
   );
+
+  const availableAreas = useMemo(() => {
+    const areaSet = new Set<string>();
+    approvedOnly.forEach((p) => {
+      if (Array.isArray((p as any).areas)) {
+        (p as any).areas.forEach((a: any) => {
+          const trimmed = String(a).trim();
+          if (trimmed) areaSet.add(trimmed);
+        });
+      }
+      if (p.area) {
+        const parts = p.area.split(/[,/;|]+/).map((s) => s.trim()).filter(Boolean);
+        parts.forEach((part) => {
+          if (part) areaSet.add(part);
+        });
+      }
+    });
+    return ["All areas", ...Array.from(areaSet).sort((a, b) => a.localeCompare(b))];
+  }, [approvedOnly]);
 
   const categoriesToDisplay = useMemo(() => {
     if (categoriesList && categoriesList.length > 0) {
@@ -733,39 +816,85 @@ function Explore({
     ];
   }, [categoriesList]);
 
+  const matchesCategory = (p: Provider, cat: string) => {
+    if (!cat || cat === "All home services" || cat === "All") return true;
+    const catLow = cat.toLowerCase();
+    const pCat = (p.category || "").toLowerCase();
+    const pTrade = (p.trade || "").toLowerCase();
+    return (
+      pCat === catLow ||
+      pTrade === catLow ||
+      pCat.includes(catLow) ||
+      pTrade.includes(catLow) ||
+      (cat === "Carpentry" && (pCat.includes("carpentry") || pTrade.includes("carpentry") || pTrade.includes("woodwork"))) ||
+      (cat === "Electrical" && (pCat.includes("electrical") || pTrade.includes("electrical") || pTrade.includes("generator"))) ||
+      (cat === "Cleaning" && (pCat.includes("cleaning") || pTrade.includes("cleaning") || pTrade.includes("sanitation"))) ||
+      (cat === "Painting" && (pCat.includes("paint") || pTrade.includes("paint"))) ||
+      (cat === "Masonry" && (pCat.includes("masonry") || pTrade.includes("masonry") || pTrade.includes("tiling") || pCat.includes("tile"))) ||
+      (cat === "Appliance Repairs" && (pCat.includes("appliance") || pTrade.includes("appliance") || pTrade.includes("gadget"))) ||
+      (cat === "HVAC/Ventilation" && (pCat.includes("hvac") || pCat.includes("air") || pCat.includes("ventilation") || pTrade.includes("ac"))) ||
+      (p.services || []).some((s) => (s.category || "").toLowerCase().includes(catLow) || (s.name || "").toLowerCase().includes(catLow))
+    );
+  };
+
+  const matchesMinRating = (p: Provider, minR: number) => {
+    if (!minR || minR <= 0) return true;
+    if (p.rating === undefined || p.rating === null || p.rating === "") return false;
+    const r = typeof p.rating === "string" ? parseFloat(p.rating) : Number(p.rating);
+    if (isNaN(r)) return false;
+    return r >= minR;
+  };
+
+  const matchesArea = (p: Provider, targetArea: string) => {
+    if (!targetArea || targetArea === "All areas" || targetArea === "All") return true;
+    const target = targetArea.trim().toLowerCase();
+    if (!target) return true;
+
+    const provArea = (p.area || "").trim().toLowerCase();
+    if (!provArea) return false;
+    if (provArea === target || provArea.includes(target) || target.includes(provArea)) return true;
+
+    const tokens = provArea.split(/[,/;|]+/).map((t) => t.trim()).filter(Boolean);
+    if (tokens.some((t) => t === target || t.includes(target) || target.includes(t))) return true;
+
+    if (Array.isArray((p as any).areas)) {
+      const areaTokens = (p as any).areas.map((a: any) => String(a).trim().toLowerCase()).filter(Boolean);
+      if (areaTokens.some((a: string) => a === target || a.includes(target) || target.includes(a))) return true;
+    }
+    return false;
+  };
+
+  const matchesQuery = (p: Provider, q: string) => {
+    if (!q) return true;
+    const servicesText = (p.services || []).map((s) => `${s.name} ${s.description || ""} ${s.category || ""}`).join(" ");
+    const combined = `${p.name} ${p.trade} ${p.category} ${p.area || ""} ${p.bio || ""} ${servicesText}`.toLowerCase();
+    return combined.includes(q);
+  };
+
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     return approvedOnly.filter((p) => {
-      let matchesCategory = false;
-      if (category === "All home services") {
-        matchesCategory = true;
-      } else {
-        const catLow = category.toLowerCase();
-        const pCat = (p.category || "").toLowerCase();
-        const pTrade = (p.trade || "").toLowerCase();
-        matchesCategory =
-          pCat === catLow ||
-          pTrade === catLow ||
-          pCat.includes(catLow) ||
-          pTrade.includes(catLow) ||
-          (category === "Carpentry" && (pCat.includes("carpentry") || pTrade.includes("carpentry") || pTrade.includes("woodwork"))) ||
-          (category === "Electrical" && (pCat.includes("electrical") || pTrade.includes("electrical") || pTrade.includes("generator"))) ||
-          (category === "Cleaning" && (pCat.includes("cleaning") || pTrade.includes("cleaning") || pTrade.includes("sanitation"))) ||
-          (category === "Painting" && (pCat.includes("paint") || pTrade.includes("paint"))) ||
-          (category === "Masonry" && (pCat.includes("masonry") || pTrade.includes("masonry") || pTrade.includes("tiling") || pCat.includes("tile"))) ||
-          (category === "Appliance Repairs" && (pCat.includes("appliance") || pTrade.includes("appliance") || pTrade.includes("gadget"))) ||
-          (category === "HVAC/Ventilation" && (pCat.includes("hvac") || pCat.includes("air") || pCat.includes("ventilation") || pTrade.includes("ac")));
-      }
-
-      if (!matchesCategory) return false;
-      if (!q) return true;
-
-      // Functional keyword search across provider profile and service listings
-      const servicesText = (p.services || []).map((s) => `${s.name} ${s.description || ""} ${s.category || ""}`).join(" ");
-      const combined = `${p.name} ${p.trade} ${p.category} ${p.area || ""} ${p.bio || ""} ${servicesText}`.toLowerCase();
-      return combined.includes(q);
+      return (
+        matchesCategory(p, category) &&
+        matchesMinRating(p, minRating) &&
+        matchesArea(p, selectedArea) &&
+        matchesQuery(p, q)
+      );
     });
-  }, [approvedOnly, query, category]);
+  }, [approvedOnly, category, minRating, selectedArea, query]);
+
+  const handleResetFilters = () => {
+    setCategory("All home services");
+    setMinRating(0);
+    setSelectedArea("All areas");
+    setQuery("");
+  };
+
+  const hasActiveFilters =
+    category !== "All home services" ||
+    minRating > 0 ||
+    selectedArea !== "All areas" ||
+    query.trim() !== "";
 
   return (
     <>
@@ -785,11 +914,112 @@ function Explore({
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search services, areas, or professionals"
+            aria-label="Search services or professionals"
           />
-          <button>
-            Accra <Icon name="chevron" size={15} />
-          </button>
+          <div className="directory-search-filters">
+            <label className="directory-filter-control" title="Filter by operating area">
+              <span className="filter-icon">📍</span>
+              <select
+                className="directory-select"
+                value={selectedArea}
+                onChange={(e) => setSelectedArea(e.target.value)}
+                aria-label="Filter by operating area"
+              >
+                {availableAreas.map((a) => (
+                  <option key={a} value={a}>
+                    {a === "All areas" ? "All Areas" : a}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="directory-filter-control" title="Filter by minimum rating">
+              <span className="filter-icon">⭐</span>
+              <select
+                className="directory-select"
+                value={minRating}
+                onChange={(e) => setMinRating(Number(e.target.value))}
+                aria-label="Filter by minimum rating"
+              >
+                <option value={0}>Any rating</option>
+                <option value={3.0}>3.0+ stars</option>
+                <option value={3.5}>3.5+ stars</option>
+                <option value={4.0}>4.0+ stars</option>
+                <option value={4.5}>4.5+ stars</option>
+              </select>
+            </label>
+          </div>
         </div>
+        {hasActiveFilters && (
+          <div className="directory-active-filters">
+            <span className="active-filters-label">Active filters:</span>
+            {category !== "All home services" && (
+              <span className="filter-chip">
+                Category: <strong>{category}</strong>
+                <button
+                  type="button"
+                  onClick={() => setCategory("All home services")}
+                  aria-label="Remove category filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {selectedArea !== "All areas" && (
+              <span className="filter-chip">
+                Area: <strong>{selectedArea}</strong>
+                <button
+                  type="button"
+                  onClick={() => setSelectedArea("All areas")}
+                  aria-label="Remove area filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {minRating > 0 && (
+              <span className="filter-chip">
+                Rating: <strong>{minRating.toFixed(1)}+ stars</strong>
+                <button
+                  type="button"
+                  onClick={() => setMinRating(0)}
+                  aria-label="Remove rating filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            {query.trim() !== "" && (
+              <span className="filter-chip">
+                Search: <strong>"{query.trim()}"</strong>
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Remove search filter"
+                >
+                  ×
+                </button>
+              </span>
+            )}
+            <button
+              type="button"
+              className="clear-all-filters-btn"
+              onClick={handleResetFilters}
+            >
+              Reset all filters
+            </button>
+          </div>
+        )}
+        {onOpenAi && (
+          <div className="hero-ai-action">
+            <button
+              type="button"
+              className="hero-ai-btn"
+              onClick={onOpenAi}
+            >
+              <span className="hero-ai-sparkle">✦</span> Not sure what you need? Describe your problem with AI &rarr;
+            </button>
+          </div>
+        )}
         <div className="need-label">WHAT BRINGS YOU HERE TODAY?</div>
         <div className="category-strip situation-strip">
           {situations.map((item) => (
@@ -816,8 +1046,8 @@ function Explore({
         </div>
         <div className="results-head">
           <p>
-            <b>{list.length || 0} handpicked professionals</b>
-            <span> in Accra</span>
+            <b>{list.length || 0} handpicked {list.length === 1 ? "professional" : "professionals"}</b>
+            <span>{selectedArea !== "All areas" ? ` in ${selectedArea}` : " in Accra"}</span>
           </p>
           <button>
             Sort: Recommended <Icon name="chevron" size={14} />
@@ -881,14 +1111,11 @@ function Explore({
             <div className="directory-empty">
               <Icon name="search" size={25} />
               <h2>No exact matches yet.</h2>
-              <p>Try another approved home-service category or a broader search.</p>
-              <button
-                onClick={() => {
-                  setCategory("All home services");
-                  setQuery("");
-                }}
-              >
-                Clear filters
+              <p>
+                No approved professionals match your selected filters. Try broadening your criteria or resetting filters.
+              </p>
+              <button onClick={handleResetFilters}>
+                Reset all filters
               </button>
             </div>
           )}
@@ -1155,7 +1382,10 @@ function Booking({
   onBookingCreated: (booking: Booking) => void;
 }) {
   const [step, setStep] = useState(1);
-  const [isInstant, setIsInstant] = useState(true);
+  const providerAllowsInstant = provider.acceptInstantBookings !== false &&
+    (!provider.supportedBookingMethods || provider.supportedBookingMethods.includes("instant")) &&
+    (!provider.availability || provider.availability.acceptInstantBookings !== false);
+  const [isInstant, setIsInstant] = useState(providerAllowsInstant);
   const [selectedDay, setSelectedDay] = useState("Tuesday, 18 June");
   const [selectedTime, setSelectedTime] = useState("10:30");
   const [fullName, setFullName] = useState(currentUser?.name || "Ama Boateng");
@@ -1275,19 +1505,28 @@ function Booking({
               <div className="category-strip" style={{ marginBottom: "20px" }}>
                 <button
                   type="button"
-                  className={isInstant ? "active" : ""}
-                  onClick={() => setIsInstant(true)}
+                  className={isInstant && providerAllowsInstant ? "active" : ""}
+                  disabled={!providerAllowsInstant}
+                  onClick={() => {
+                    if (providerAllowsInstant) setIsInstant(true);
+                  }}
+                  title={providerAllowsInstant ? "Instant confirmation" : "Provider currently accepts request bookings only"}
                 >
-                  ⚡ Instant Confirmation
+                  ⚡ Instant Confirmation {!providerAllowsInstant && "(Unavailable)"}
                 </button>
                 <button
                   type="button"
-                  className={!isInstant ? "active" : ""}
+                  className={!isInstant || !providerAllowsInstant ? "active" : ""}
                   onClick={() => setIsInstant(false)}
                 >
                   📋 Standard Request
                 </button>
               </div>
+              {!providerAllowsInstant && (
+                <div style={{ fontSize: "0.85rem", color: "#8a7852", background: "#fcf9f2", padding: "8px 12px", borderRadius: "6px", margin: "-10px 0 16px 0", border: "1px solid #e7ded0" }}>
+                  ℹ️ {provider.name} currently accepts booking requests only. Your request will be reviewed by the professional before confirmation.
+                </div>
+              )}
 
               <div className="date-row">
                 {[
@@ -1582,6 +1821,7 @@ function CustomerDashboard({
   onLogout,
   onBookingStatusUpdated,
   onReviewSubmitted,
+  onUserUpdated,
 }: {
   go: (v: View) => void;
   currentUser: User | null;
@@ -1591,11 +1831,63 @@ function CustomerDashboard({
   onLogout?: () => void;
   onBookingStatusUpdated?: (bookingId: string, status: any) => void;
   onReviewSubmitted?: (review: Review, providerRating?: number) => void;
+  onUserUpdated?: (user: User) => void;
 }) {
   const [active, setActive] = useState("Overview");
   const [toast, setToast] = useState("");
   const [reviewedBookings, setReviewedBookings] = useState<Record<string, Review>>({});
   const [activeReviewBooking, setActiveReviewBooking] = useState<Booking | null>(null);
+
+  // Customer Profile State (FR-03)
+  const [profileName, setProfileName] = useState(currentUser?.name || "");
+  const [profilePhone, setProfilePhone] = useState(currentUser?.phone || "");
+  const [profileAddress, setProfileAddress] = useState(currentUser?.address || "");
+  const [profileArea, setProfileArea] = useState(currentUser?.area || "");
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileSuccess, setProfileSuccess] = useState("");
+  const [profileError, setProfileError] = useState("");
+
+  useEffect(() => {
+    if (currentUser) {
+      setProfileName(currentUser.name || "");
+      setProfilePhone(currentUser.phone || "");
+      setProfileAddress(currentUser.address || "");
+      setProfileArea(currentUser.area || "");
+    }
+  }, [currentUser]);
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    if (!profileName.trim()) {
+      setProfileError("Full name is required.");
+      return;
+    }
+    setProfileSaving(true);
+    setProfileError("");
+    setProfileSuccess("");
+    try {
+      const res = await api.updateUserProfile(currentUser.id, {
+        name: profileName.trim(),
+        phone: profilePhone.trim(),
+        address: profileAddress.trim(),
+        area: profileArea.trim(),
+      });
+      if (res.ok && res.user) {
+        if (onUserUpdated) onUserUpdated(res.user);
+        setProfileSuccess("Profile updated successfully!");
+        setToast("Profile saved successfully");
+        setTimeout(() => {
+          setProfileSuccess("");
+          setToast("");
+        }, 3000);
+      }
+    } catch (err: any) {
+      setProfileError(err.message || "Failed to update profile. Please try again.");
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -1874,26 +2166,86 @@ function CustomerDashboard({
       ) : active === "Profile & settings" ? (
         <section className="management-panel">
           <div className="panel-head">
-            <h2>Your Profile Information</h2>
+            <div>
+              <span className="kicker">ACCOUNT SETTINGS</span>
+              <h2>Your Profile Information</h2>
+              <p style={{ color: "#6c6b64", fontSize: "0.9rem", marginTop: "4px" }}>
+                Update your contact details and default address for home maintenance bookings.
+              </p>
+            </div>
           </div>
-          <div className="form-grid" style={{ padding: "20px 0" }}>
+
+          {profileSuccess && (
+            <div className="account-alert-banner" style={{ background: "#f2f7f1", borderColor: "#7e9270", color: "#2e4823", margin: "16px 0 0" }}>
+              <Icon name="check" />
+              <div><strong>Success:</strong> {profileSuccess}</div>
+            </div>
+          )}
+
+          {profileError && (
+            <div className="account-alert-banner" style={{ background: "#fbf2f2", borderColor: "#c45b5b", color: "#8a2727", margin: "16px 0 0" }}>
+              <Icon name="close" />
+              <div><strong>Error:</strong> {profileError}</div>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveProfile} className="form-grid" style={{ padding: "20px 0 10px" }}>
             <label>
-              Full name
-              <input defaultValue={currentUser?.name || "Ama Boateng"} readOnly />
+              Full name *
+              <input
+                type="text"
+                value={profileName}
+                onChange={(e) => setProfileName(e.target.value)}
+                placeholder="e.g. Ama Boateng"
+                required
+              />
             </label>
             <label>
-              Email address
-              <input defaultValue={currentUser?.email || "ama@example.com"} readOnly />
+              Email address (account login)
+              <input
+                type="email"
+                value={currentUser?.email || "ama@example.com"}
+                readOnly
+                title="Email address is linked to your login credentials"
+              />
             </label>
             <label>
               Phone number
-              <input defaultValue={currentUser?.phone || "+233 24 555 0184"} readOnly />
+              <input
+                type="tel"
+                value={profilePhone}
+                onChange={(e) => setProfilePhone(e.target.value)}
+                placeholder="e.g. +233 24 555 0184"
+              />
             </label>
             <label>
-              Default address
-              <input defaultValue={currentUser?.address || "24 Kofi Annan Street, Adenta, Accra"} readOnly />
+              Neighborhood / Area
+              <input
+                type="text"
+                value={profileArea}
+                onChange={(e) => setProfileArea(e.target.value)}
+                placeholder="e.g. Adenta, Accra"
+              />
             </label>
-          </div>
+            <label className="full">
+              Default service address
+              <input
+                type="text"
+                value={profileAddress}
+                onChange={(e) => setProfileAddress(e.target.value)}
+                placeholder="e.g. 24 Kofi Annan Street, Adenta, Accra"
+              />
+            </label>
+            <div className="full" style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px" }}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={profileSaving}
+              >
+                <Icon name="check" size={13} /> {profileSaving ? "Saving changes..." : "Save Profile Details"}
+              </button>
+            </div>
+          </form>
         </section>
       ) : (
         <EmptyState title={active} go={go} />
@@ -2081,6 +2433,22 @@ function ProDashboard({
   const [emergencyAvailable, setEmergencyAvailable] = useState<boolean>(
     currentProvider?.availability?.emergencyAvailable || false
   );
+  const [acceptInstantBookings, setAcceptInstantBookings] = useState<boolean>(
+    currentProvider?.acceptInstantBookings ?? (currentProvider?.availability?.acceptInstantBookings ?? true)
+  );
+
+  // Provider Business Profile State (FR-04, FR-09)
+  const [proName, setProName] = useState(currentProvider?.name || "");
+  const [proTrade, setProTrade] = useState(currentProvider?.trade || "");
+  const [proCategory, setProCategory] = useState(currentProvider?.category || "");
+  const [proPhone, setProPhone] = useState(currentProvider?.phone || "");
+  const [proArea, setProArea] = useState(currentProvider?.area || "");
+  const [proBio, setProBio] = useState(currentProvider?.bio || "");
+  const [proPrice, setProPrice] = useState(String(currentProvider?.price || "350"));
+  const [proImage, setProImage] = useState(currentProvider?.image || "");
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [profileMsg, setProfileMsg] = useState("");
+  const [profileErr, setProfileErr] = useState("");
   const [savingAvail, setSavingAvail] = useState(false);
   const [proReviews, setProReviews] = useState<Review[]>([]);
 
@@ -2093,19 +2461,32 @@ function ProDashboard({
   }, [providerId, currentProvider?.rating]);
 
   useEffect(() => {
-    if (currentProvider && currentProvider.availability) {
-      setAcceptingBookings(currentProvider.availability.acceptingBookings ?? true);
-      setWorkingDays(
-        currentProvider.availability.workingDays || [
-          "Monday",
-          "Tuesday",
-          "Wednesday",
-          "Thursday",
-          "Friday",
-        ]
+    if (currentProvider) {
+      setProName(currentProvider.name || "");
+      setProTrade(currentProvider.trade || "");
+      setProCategory(currentProvider.category || "");
+      setProPhone(currentProvider.phone || "");
+      setProArea(currentProvider.area || "");
+      setProBio(currentProvider.bio || "");
+      setProPrice(String(currentProvider.price || "350"));
+      setProImage(currentProvider.image || "");
+      setAcceptInstantBookings(
+        currentProvider.acceptInstantBookings ?? (currentProvider.availability?.acceptInstantBookings ?? true)
       );
-      setWorkingHours(currentProvider.availability.workingHours || "08:00 - 17:00");
-      setEmergencyAvailable(currentProvider.availability.emergencyAvailable || false);
+      if (currentProvider.availability) {
+        setAcceptingBookings(currentProvider.availability.acceptingBookings ?? true);
+        setWorkingDays(
+          currentProvider.availability.workingDays || [
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+          ]
+        );
+        setWorkingHours(currentProvider.availability.workingHours || "08:00 - 17:00");
+        setEmergencyAvailable(currentProvider.availability.emergencyAvailable || false);
+      }
     }
   }, [currentProvider]);
 
@@ -2219,14 +2600,61 @@ function ProDashboard({
         workingDays,
         workingHours,
         emergencyAvailable,
+        acceptInstantBookings,
+        supportedBookingMethods: acceptInstantBookings ? ["instant", "request"] : ["request"],
       });
-      const updated = { ...currentProvider, availability: res.availability };
+      const updated = {
+        ...currentProvider,
+        acceptInstantBookings,
+        supportedBookingMethods: acceptInstantBookings ? ["instant", "request"] : ["request"],
+        availability: res.availability,
+      };
       onProviderUpdated(updated);
-      action("Availability schedule saved");
+      action("Availability schedule and booking settings saved");
     } catch (err: any) {
       action(err.message || "Failed to update availability");
     } finally {
       setSavingAvail(false);
+    }
+  };
+
+  const handleSaveProfile = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!proName.trim()) {
+      setProfileErr("Business / Trade name is required.");
+      return;
+    }
+    const priceNum = Number(proPrice);
+    if (isNaN(priceNum) || priceNum < 0) {
+      setProfileErr("Please enter a valid base price.");
+      return;
+    }
+    setSavingProfile(true);
+    setProfileErr("");
+    setProfileMsg("");
+    try {
+      const res = await api.updateProviderProfile(providerId, {
+        name: proName.trim(),
+        trade: proTrade.trim(),
+        category: proCategory.trim(),
+        phone: proPhone.trim(),
+        area: proArea.trim(),
+        bio: proBio.trim(),
+        price: priceNum,
+        image: proImage.trim(),
+        acceptInstantBookings,
+        supportedBookingMethods: acceptInstantBookings ? ["instant", "request"] : ["request"],
+      });
+      if (res.ok && res.provider) {
+        onProviderUpdated(res.provider);
+        setProfileMsg("Provider business profile updated successfully!");
+        action("Business profile saved");
+        setTimeout(() => setProfileMsg(""), 3000);
+      }
+    } catch (err: any) {
+      setProfileErr(err.message || "Failed to update profile.");
+    } finally {
+      setSavingProfile(false);
     }
   };
 
@@ -2456,6 +2884,8 @@ function ProDashboard({
           setWorkingHours={setWorkingHours}
           emergencyAvailable={emergencyAvailable}
           setEmergencyAvailable={setEmergencyAvailable}
+          acceptInstantBookings={acceptInstantBookings}
+          setAcceptInstantBookings={setAcceptInstantBookings}
           onSave={handleSaveAvailability}
           saving={savingAvail}
         />
@@ -2538,26 +2968,111 @@ function ProDashboard({
       ) : active === "Business profile" ? (
         <section className="management-panel">
           <div className="panel-head">
-            <h2>Provider Profile Details</h2>
+            <div>
+              <span className="kicker">PUBLIC PROFILE & BIO</span>
+              <h2>Provider Profile Management (FR-04, FR-09)</h2>
+              <p style={{ color: "#6c6b64", fontSize: "0.9rem", marginTop: "4px" }}>
+                Manage your public trade bio, business contact details, operating area, and pricing displayed to customers in the directory.
+              </p>
+            </div>
+            <span className="locked-label">
+              Status: {currentProvider.status === "approved" ? "✓ Verified & Public" : currentProvider.status === "declined" ? "✗ Declined" : "⏳ Pending Review"}
+            </span>
           </div>
-          <div className="form-grid" style={{ padding: "20px 0" }}>
+
+          {profileMsg && (
+            <div className="account-alert-banner" style={{ background: "#f2f7f1", borderColor: "#7e9270", color: "#2e4823", margin: "16px 0 0" }}>
+              <Icon name="check" />
+              <div><strong>Success:</strong> {profileMsg}</div>
+            </div>
+          )}
+
+          {profileErr && (
+            <div className="account-alert-banner" style={{ background: "#fbf2f2", borderColor: "#c45b5b", color: "#8a2727", margin: "16px 0 0" }}>
+              <Icon name="close" />
+              <div><strong>Error:</strong> {profileErr}</div>
+            </div>
+          )}
+
+          <form onSubmit={handleSaveProfile} className="form-grid" style={{ padding: "20px 0 10px" }}>
             <label>
-              Trade Name
-              <input defaultValue={currentProvider.name} readOnly />
+              Trade / Business Name *
+              <input
+                type="text"
+                value={proName}
+                onChange={(e) => setProName(e.target.value)}
+                placeholder="e.g. Kwame Ofori Joinery"
+                required
+              />
             </label>
             <label>
-              Primary Category
-              <input defaultValue={currentProvider.category} readOnly />
+              Primary Category / Trade
+              <input
+                type="text"
+                value={proCategory}
+                onChange={(e) => {
+                  setProCategory(e.target.value);
+                  setProTrade(e.target.value);
+                }}
+                placeholder="e.g. Carpentry & Woodwork"
+              />
             </label>
             <label>
-              Contact Number
-              <input defaultValue={currentProvider.phone || "+233 24 555 0184"} readOnly />
+              Contact Phone Number
+              <input
+                type="tel"
+                value={proPhone}
+                onChange={(e) => setProPhone(e.target.value)}
+                placeholder="e.g. +233 24 555 0184"
+              />
             </label>
             <label>
-              Operating Area
-              <input defaultValue={currentProvider.area || "Accra"} readOnly />
+              Operating Areas / Neighborhoods
+              <input
+                type="text"
+                value={proArea}
+                onChange={(e) => setProArea(e.target.value)}
+                placeholder="e.g. Adenta, East Legon, Accra"
+              />
             </label>
-          </div>
+            <label>
+              Standard Base Hourly Rate (GH₵)
+              <input
+                type="number"
+                min="0"
+                value={proPrice}
+                onChange={(e) => setProPrice(e.target.value)}
+                placeholder="450"
+              />
+            </label>
+            <label>
+              Profile Photo URL
+              <input
+                type="url"
+                value={proImage}
+                onChange={(e) => setProImage(e.target.value)}
+                placeholder="https://..."
+              />
+            </label>
+            <label className="full">
+              Professional Bio & Qualifications
+              <textarea
+                rows={4}
+                value={proBio}
+                onChange={(e) => setProBio(e.target.value)}
+                placeholder="Describe your trade expertise, years of experience, tools, and guarantees..."
+              />
+            </label>
+            <div className="full" style={{ display: "flex", justifyContent: "flex-end", marginTop: "12px" }}>
+              <button
+                type="submit"
+                className="primary-button"
+                disabled={savingProfile}
+              >
+                <Icon name="check" size={13} /> {savingProfile ? "Saving profile..." : "Save Profile Details"}
+              </button>
+            </div>
+          </form>
         </section>
       ) : (
         <EmptyState title={active} go={go} />
@@ -2730,6 +3245,8 @@ function AvailabilityPanel({
   setWorkingHours,
   emergencyAvailable,
   setEmergencyAvailable,
+  acceptInstantBookings,
+  setAcceptInstantBookings,
   onSave,
   saving,
 }: {
@@ -2741,6 +3258,8 @@ function AvailabilityPanel({
   setWorkingHours: (v: string) => void;
   emergencyAvailable: boolean;
   setEmergencyAvailable: (v: boolean) => void;
+  acceptInstantBookings?: boolean;
+  setAcceptInstantBookings?: (v: boolean) => void;
   onSave: () => void;
   saving: boolean;
 }) {
@@ -2829,6 +3348,31 @@ function AvailabilityPanel({
             <option value="yes">Yes — Available for urgent callouts</option>
             <option value="no">No — Standard operating hours only</option>
           </select>
+        </label>
+
+        <label className="full">
+          Supported Booking Methods (FR-13)
+          <div className="category-strip" style={{ marginTop: "8px" }}>
+            <button
+              className={acceptInstantBookings ? "active" : ""}
+              type="button"
+              onClick={() => setAcceptInstantBookings && setAcceptInstantBookings(true)}
+            >
+              ⚡ Instant & Request (Automatic Confirmation + Requests)
+            </button>
+            <button
+              className={!acceptInstantBookings ? "active" : ""}
+              type="button"
+              onClick={() => setAcceptInstantBookings && setAcceptInstantBookings(false)}
+            >
+              📋 Request Only (Manual Review Required)
+            </button>
+          </div>
+          <small style={{ color: "#6c6b64", marginTop: "6px", display: "block" }}>
+            {acceptInstantBookings
+              ? "Customers can instantly confirm bookings during your operating hours, or submit requests."
+              : "Instant booking is disabled. All booking submissions require your manual review and approval."}
+          </small>
         </label>
       </div>
 
@@ -4043,9 +4587,11 @@ function Modal({
 function Footer({
   go,
   onOpenOnboarding,
+  onOpenContact,
 }: {
   go: (v: View) => void;
   onOpenOnboarding: () => void;
+  onOpenContact?: () => void;
 }) {
   return (
     <footer>
@@ -4060,16 +4606,138 @@ function Footer({
         <button onClick={onOpenOnboarding}>Become a provider</button>
       </div>
       <div>
-        <b>Dashboards</b>
-        <button onClick={() => go("customer")}>Customer Portal</button>
-        <button onClick={() => go("pro")}>Provider Studio</button>
-        <button onClick={() => go("admin")}>Admin Control Room</button>
+        <b>Platform</b>
+        <button
+          onClick={() => {
+            go("home");
+            setTimeout(
+              () => document.getElementById("how")?.scrollIntoView({ behavior: "smooth" }),
+              100,
+            );
+          }}
+        >
+          How it works
+        </button>
+        <button onClick={() => go("explore")}>Approved trades</button>
+        <button
+          onClick={() => {
+            go("home");
+            setTimeout(
+              () => document.getElementById("featured")?.scrollIntoView({ behavior: "smooth" }),
+              100,
+            );
+          }}
+        >
+          Verified artisans
+        </button>
+        <button onClick={onOpenContact}>Contact / Support</button>
       </div>
       <div className="footer-note">
         <span>ACCRA · GHANA</span>
         <small>© 2026 ServePoint Ghana</small>
       </div>
     </footer>
+  );
+}
+
+function ContactModal({ close }: { close: () => void }) {
+  const [submitted, setSubmitted] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [message, setMessage] = useState("");
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitted(true);
+  };
+
+  return (
+    <Modal title="Contact & Platform Support" close={close}>
+      {submitted ? (
+        <div style={{ padding: "20px 0", textAlign: "center" }}>
+          <div style={{ fontSize: "32px", marginBottom: "12px", color: "var(--forest)" }}>✓</div>
+          <h3 style={{ margin: "0 0 8px 0" }}>Message Received</h3>
+          <p style={{ color: "var(--muted)", maxWidth: "380px", margin: "0 auto 20px", fontSize: "14px" }}>
+            Thank you, {name || "there"}. Our Accra support team will get back to you at {email || "your email"} within 2 business hours.
+          </p>
+          <button className="primary-button" onClick={close} style={{ margin: "0 auto" }}>
+            Done
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+              gap: "16px",
+              padding: "16px",
+              background: "var(--paper)",
+              borderRadius: "8px",
+              marginBottom: "20px",
+              fontSize: "13px",
+            }}
+          >
+            <div>
+              <strong style={{ display: "block", color: "var(--ink)", marginBottom: "4px" }}>
+                Accra Support Desk
+              </strong>
+              <div style={{ color: "var(--muted)" }}>+233 30 200 0000</div>
+              <div style={{ color: "var(--muted)" }}>support@servepoint.gh</div>
+            </div>
+            <div>
+              <strong style={{ display: "block", color: "var(--ink)", marginBottom: "4px" }}>
+                Service Hours & Office
+              </strong>
+              <div style={{ color: "var(--muted)" }}>Mon – Sat: 7:30 AM – 7:00 PM GMT</div>
+              <div style={{ color: "var(--muted)" }}>Airport Residential, Accra, Ghana</div>
+            </div>
+          </div>
+
+          <form onSubmit={handleSubmit}>
+            <div className="form-grid">
+              <label>
+                Your Name
+                <input
+                  required
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Kwame Mensah"
+                />
+              </label>
+              <label>
+                Email Address
+                <input
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="e.g. kwame@example.com"
+                />
+              </label>
+              <label className="full">
+                How can we assist you?
+                <textarea
+                  required
+                  rows={4}
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Provide details about your inquiry, booking issue, or trade support request..."
+                />
+              </label>
+            </div>
+            <div className="modal-actions">
+              <button type="button" onClick={close}>
+                Cancel
+              </button>
+              <button type="submit" className="primary-button">
+                Send Inquiry <Icon name="arrow" />
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </Modal>
   );
 }
 
@@ -4095,7 +4763,6 @@ function AuthModal({
   const [trade, setTrade] = useState("Carpentry & Woodwork");
   const [area, setArea] = useState("Accra");
   const [loading, setLoading] = useState(false);
-  const [activeDemo, setActiveDemo] = useState<string | null>(null);
   const [error, setError] = useState(initialError);
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -4147,27 +4814,6 @@ function AuthModal({
       setError(err.message || "Registration failed.");
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleQuickDemo = async (demoEmail: string) => {
-    setEmail(demoEmail);
-    setPassword("password123");
-    setActiveDemo(demoEmail);
-    setLoading(true);
-    setError("");
-    try {
-      const res = await api.login({ email: demoEmail, password: "password123" });
-      if (res.ok && res.user) {
-        onSuccess(res.user);
-      } else {
-        setError("Invalid demo credentials.");
-      }
-    } catch (err: any) {
-      setError(err.message || "Demo sign in failed.");
-    } finally {
-      setLoading(false);
-      setActiveDemo(null);
     }
   };
 
@@ -4349,42 +4995,295 @@ function AuthModal({
             </div>
           </form>
         )}
-
-        {/* Demo Fast Access */}
-        <div style={{ marginTop: "24px", paddingTop: "18px", borderTop: "1px dashed var(--line)" }}>
-          <span className="kicker" style={{ display: "block", marginBottom: "8px" }}>VERIFIED DEMO ACCOUNTS (INSTANT SIGN IN)</span>
-          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-            <button
-              type="button"
-              className="outline-button"
-              disabled={loading}
-              style={{ fontSize: "11px", padding: "6px 12px" }}
-              onClick={() => handleQuickDemo("ama@example.com")}
-            >
-              {activeDemo === "ama@example.com" ? "Signing in..." : "Customer: Ama Boateng"}
-            </button>
-            <button
-              type="button"
-              className="outline-button"
-              disabled={loading}
-              style={{ fontSize: "11px", padding: "6px 12px" }}
-              onClick={() => handleQuickDemo("kwame@example.com")}
-            >
-              {activeDemo === "kwame@example.com" ? "Signing in..." : "Artisan: Kwame Ofori"}
-            </button>
-            <button
-              type="button"
-              className="outline-button"
-              disabled={loading}
-              style={{ fontSize: "11px", padding: "6px 12px" }}
-              onClick={() => handleQuickDemo("admin@servepoint.gh")}
-            >
-              {activeDemo === "admin@servepoint.gh" ? "Signing in..." : "Admin: Platform Control"}
-            </button>
-          </div>
-        </div>
       </div>
     </Modal>
+  );
+}
+
+function AiAssistantModal({
+  isOpen,
+  close,
+  onStartBooking,
+  onExploreCategory,
+}: {
+  isOpen: boolean;
+  close: () => void;
+  onStartBooking: (p: Provider, serviceName?: string) => void;
+  onExploreCategory: (categoryName: string) => void;
+}) {
+  const [messages, setMessages] = useState<Array<{
+    role: "user" | "assistant";
+    content: string;
+    responseData?: ChatResponse;
+  }>>([
+    {
+      role: "assistant",
+      content:
+        "Hello! I am your ServePoint Diagnostic Assistant. Describe what is broken or what you need fixed, and I will recommend the right category and verified specialists across Greater Accra.",
+    },
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const endRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (isOpen) {
+      endRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [isOpen, messages, loading]);
+
+  if (!isOpen) return null;
+
+  const quickPrompts = [
+    "My kitchen pipes are leaking water",
+    "Living room lights flicker when AC turns on",
+    "Need to assemble and mount furniture",
+    "AC blowing warm air instead of cooling",
+    "Complete home deep cleaning",
+  ];
+
+  const handleSend = async (textToSend?: string) => {
+    const text = (textToSend || input).trim();
+    if (!text || loading) return;
+
+    setError(null);
+    setInput("");
+    const newHistory = [...messages, { role: "user" as const, content: text }];
+    setMessages(newHistory);
+    setLoading(true);
+
+    try {
+      const apiMessages: ChatMessage[] = newHistory.map((m) => ({
+        role: m.role,
+        content: m.content,
+      }));
+      const res = await api.sendChatMessage(apiMessages);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: res.reply || "I analyzed your request.",
+          responseData: res,
+        },
+      ]);
+    } catch (err: any) {
+      console.error("[AiAssistant]", err);
+      const msg = err?.message || "Diagnostic service is currently unavailable.";
+      setError(msg);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Our AI assistant is temporarily unavailable. You can still browse our verified specialists in the directory.",
+        },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReset = () => {
+    setMessages([
+      {
+        role: "assistant",
+        content:
+          "Hello! I am your ServePoint Diagnostic Assistant. Describe what is broken or what you need fixed, and I will recommend the right category and verified specialists across Greater Accra.",
+      },
+    ]);
+    setInput("");
+    setError(null);
+  };
+
+  return (
+    <div
+      className="modal-backdrop"
+      onMouseDown={(e) => e.target === e.currentTarget && close()}
+    >
+      <div className="modal ai-modal-box" role="dialog" aria-modal="true">
+        <div className="ai-modal-header">
+          <div className="ai-modal-title-wrap">
+            <span className="kicker">SERVEPOINT AI DIAGNOSIS</span>
+            <h2>AI Diagnostic Assistant</h2>
+            <p className="ai-modal-subtitle">
+              Describe your repair in plain language — our system matches you to the right trade and verified specialists.
+            </p>
+          </div>
+          <button className="ai-close-btn" onClick={close} aria-label="Close dialog">
+            ✕
+          </button>
+        </div>
+
+        <div className="ai-quick-prompts-bar">
+          <span className="ai-quick-prompts-label">Try asking:</span>
+          {quickPrompts.map((p, idx) => (
+            <button
+              key={idx}
+              type="button"
+              className="ai-prompt-chip"
+              onClick={() => handleSend(p)}
+              disabled={loading}
+            >
+              {p}
+            </button>
+          ))}
+        </div>
+
+        <div className="ai-chat-thread">
+          {messages.map((m, idx) => {
+            const isUser = m.role === "user";
+            const resp = m.responseData;
+            return (
+              <div
+                key={idx}
+                className={`ai-msg-row ${isUser ? "ai-msg-user-row" : "ai-msg-assistant-row"}`}
+              >
+                <div className={isUser ? "ai-msg-user-bubble" : "ai-msg-assistant-bubble"}>
+                  {!isUser && (
+                    <div className="ai-assistant-meta">
+                      <span>✦</span> ServePoint Assistant
+                    </div>
+                  )}
+                  <div>{m.content}</div>
+
+                  {resp?.service && (
+                    <div className="ai-cat-badge">
+                      <span>✓ Category Identified:</span>{" "}
+                      <b>{resp.service.toUpperCase()}</b>
+                      {resp.detail ? ` — ${resp.detail}` : ""}
+                    </div>
+                  )}
+
+                  {resp?.providers && resp.providers.length > 0 && (
+                    <div className="ai-recommendations-section">
+                      <div className="ai-recommendations-title">
+                        Recommended Verified Specialists:
+                      </div>
+                      {resp.providers.slice(0, 3).map((prov) => {
+                        const topService =
+                          prov.services && prov.services.length > 0
+                            ? prov.services[0]
+                            : undefined;
+                        return (
+                          <div key={prov.id} className="ai-provider-card">
+                            <div className="ai-provider-info">
+                              <div className="ai-provider-avatar">
+                                {prov.image ? (
+                                  <img src={prov.image} alt={prov.name} />
+                                ) : (
+                                  prov.initials || "SP"
+                                )}
+                              </div>
+                              <div>
+                                <div className="ai-provider-name">{prov.name}</div>
+                                <div className="ai-provider-meta">
+                                  {prov.trade} · ★ {prov.rating} ({prov.jobs} jobs) · {prov.area}
+                                </div>
+                                <div className="ai-provider-price">
+                                  From GH₵ {prov.price}{topService ? ` · ${topService.name}` : ""}
+                                </div>
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="ai-book-btn"
+                              onClick={() => {
+                                close();
+                                onStartBooking(prov, topService?.name);
+                              }}
+                            >
+                              Book Pro &rarr;
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {resp?.service && (!resp.providers || resp.providers.length === 0) && (
+                    <div className="ai-no-providers-box">
+                      <p>No active specialists currently listed for {resp.service}.</p>
+                      <button
+                        type="button"
+                        className="ai-book-btn"
+                        onClick={() => {
+                          close();
+                          onExploreCategory("All home services");
+                        }}
+                      >
+                        Browse all directory providers &rarr;
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {loading && (
+            <div className="ai-msg-row ai-msg-assistant-row">
+              <div className="ai-msg-assistant-bubble">
+                <div className="ai-typing-indicator">
+                  <span>✦</span> Analyzing your description and searching verified specialists...
+                </div>
+              </div>
+            </div>
+          )}
+
+          {error && (
+            <div className="ai-error-banner">
+              <div>
+                <strong>Notice:</strong> {error}
+              </div>
+              <button
+                type="button"
+                className="ai-fallback-btn"
+                onClick={() => {
+                  close();
+                  onExploreCategory("All home services");
+                }}
+              >
+                Browse directory manually &rarr;
+              </button>
+            </div>
+          )}
+
+          <div ref={endRef} />
+        </div>
+
+        <form
+          className="ai-input-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSend();
+          }}
+        >
+          <input
+            type="text"
+            className="ai-text-input"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="Describe your issue (e.g. My sink pipe is leaking water under the counter)..."
+            disabled={loading}
+          />
+          <button
+            type="submit"
+            className="ai-send-btn"
+            disabled={loading || !input.trim()}
+          >
+            {loading ? "Thinking..." : "Send"}
+          </button>
+          <button
+            type="button"
+            className="ai-clear-btn"
+            onClick={handleReset}
+            title="Start fresh conversation"
+          >
+            Reset
+          </button>
+        </form>
+      </div>
+    </div>
   );
 }
 
@@ -4395,6 +5294,8 @@ export default function App() {
   const [categoriesList, setCategoriesList] = useState<Category[]>([]);
   const [stats, setStats] = useState<PlatformStats | null>(null);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const currentUserRef = useRef<User | null>(currentUser);
+  currentUserRef.current = currentUser;
   const [selectedProvider, setSelectedProvider] = useState<Provider>(initialProviders[1]);
   const [selectedServiceName, setSelectedServiceName] = useState<string | undefined>();
   const [authModalOpen, setAuthModalOpen] = useState(false);
@@ -4402,6 +5303,8 @@ export default function App() {
   const [authRole, setAuthRole] = useState<"customer" | "provider">("customer");
   const [authError, setAuthError] = useState("");
   const [onboardModalOpen, setOnboardModalOpen] = useState(false);
+  const [aiModalOpen, setAiModalOpen] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
 
   // Form states for onboarding
   const [onboardName, setOnboardName] = useState("");
@@ -4412,33 +5315,44 @@ export default function App() {
   const [onboardBio, setOnboardBio] = useState("");
 
   const go = (next: View) => {
+    const activeUser = currentUserRef.current;
     // Role-based access control guards
     if (next === "admin") {
-      if (!currentUser || currentUser.role !== "admin") {
+      if (!activeUser || activeUser.role !== "admin") {
         setAuthError("Administrator privileges required. Please sign in with an administrator account.");
         setAuthTab("login");
         setAuthModalOpen(true);
+        setView("home");
+        try { window.location.hash = "home"; } catch (e) {}
         return;
       }
+      api.getProviders(true).then((res) => { if (res.providers) setProvidersList(res.providers); }).catch(() => {});
     }
     if (next === "pro") {
-      if (!currentUser || (currentUser.role !== "artisan" && currentUser.role !== "provider" && currentUser.role !== "admin")) {
+      if (!activeUser || (activeUser.role !== "artisan" && activeUser.role !== "provider" && activeUser.role !== "admin")) {
         setAuthError("Provider Studio requires a registered Service Provider or Artisan account.");
         setAuthRole("provider");
-        setAuthTab("register");
+        setAuthTab("login");
         setAuthModalOpen(true);
+        setView("home");
+        try { window.location.hash = "home"; } catch (e) {}
         return;
       }
     }
     if (next === "customer") {
-      if (!currentUser) {
+      if (!activeUser) {
         setAuthError("Please sign in or create an account to view your Customer Dashboard.");
         setAuthTab("login");
         setAuthModalOpen(true);
+        setView("home");
+        try { window.location.hash = "home"; } catch (e) {}
         return;
       }
     }
     setView(next);
+    try {
+      window.location.hash = next;
+    } catch (e) {}
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -4446,26 +5360,55 @@ export default function App() {
     const returnHome = () => go("home");
     window.addEventListener("servepoint:home", returnHome);
 
+    const handleHashRouting = () => {
+      const rawHash = (window.location.hash || "").replace(/^#\/?/, "").toLowerCase();
+      const urlParams = new URLSearchParams(window.location.search);
+      const viewParam = urlParams.get("view")?.toLowerCase();
+      const target = (rawHash || viewParam || "") as View;
+      const validViews: View[] = ["home", "explore", "provider", "booking", "customer", "pro", "admin"];
+      if (validViews.includes(target) && target !== "home") {
+        go(target);
+      }
+    };
+
+    window.addEventListener("hashchange", handleHashRouting);
+
     // Session restoration on mount
     const savedToken = localStorage.getItem("servepoint_token");
+    let isCachedAdmin = false;
     if (savedToken) {
+      try {
+        const cached = JSON.parse(localStorage.getItem("servepoint_user") || "{}");
+        if (cached && cached.role === "admin") isCachedAdmin = true;
+      } catch (e) {}
       api.getMe().then((res) => {
         if (res.user) {
+          currentUserRef.current = res.user;
           setCurrentUser(res.user);
+          if (res.user.role === "admin") {
+            api.getProviders(true).then((pRes) => {
+              if (pRes.providers) setProvidersList(pRes.providers);
+            }).catch(() => {});
+          }
+          handleHashRouting();
         } else {
           localStorage.removeItem("servepoint_token");
           localStorage.removeItem("servepoint_user");
+          handleHashRouting();
         }
       }).catch(() => {
         localStorage.removeItem("servepoint_token");
         localStorage.removeItem("servepoint_user");
+        handleHashRouting();
       });
+    } else {
+      handleHashRouting();
     }
 
     const loadData = async () => {
       try {
         const [provRes, bookRes, catRes, statRes] = await Promise.allSettled([
-          api.getProviders(true),
+          api.getProviders(isCachedAdmin),
           api.getBookings(),
           api.getCategories(),
           api.getStats(),
@@ -4490,7 +5433,10 @@ export default function App() {
     };
     loadData();
 
-    return () => window.removeEventListener("servepoint:home", returnHome);
+    return () => {
+      window.removeEventListener("servepoint:home", returnHome);
+      window.removeEventListener("hashchange", handleHashRouting);
+    };
   }, []);
 
   const handleStartBooking = (provider: Provider, serviceName?: string) => {
@@ -4559,6 +5505,7 @@ export default function App() {
   };
 
   const handleAuthSuccess = (user: User) => {
+    currentUserRef.current = user;
     setCurrentUser(user);
     setAuthModalOpen(false);
     setAuthError("");
@@ -4567,19 +5514,26 @@ export default function App() {
     api.getStats().then((res) => { if (res.stats) setStats(res.stats); }).catch(() => {});
     // Direct user according to their actual authenticated role
     if (user.role === "admin") {
+      api.getProviders(true).then((res) => { if (res.providers) setProvidersList(res.providers); }).catch(() => {});
       setView("admin");
+      try { window.location.hash = "admin"; } catch (e) {}
     } else if (user.role === "artisan" || user.role === "provider") {
       setView("pro");
+      try { window.location.hash = "pro"; } catch (e) {}
     } else {
       setView("customer");
+      try { window.location.hash = "customer"; } catch (e) {}
     }
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
   const handleLogout = async () => {
     await api.logout();
+    currentUserRef.current = null;
     setCurrentUser(null);
     setView("home");
+    try { window.location.hash = "home"; } catch (e) {}
+    api.getProviders(false).then((res) => { if (res.providers) setProvidersList(res.providers); }).catch(() => {});
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
@@ -4612,6 +5566,7 @@ export default function App() {
         currentUser={currentUser}
         onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
         onLogout={handleLogout}
+        onOpenContact={() => setContactModalOpen(true)}
       />
 
       {view === "home" ? (
@@ -4622,6 +5577,7 @@ export default function App() {
             setSelectedProvider(p);
             go("provider");
           }}
+          onOpenAi={() => setAiModalOpen(true)}
         />
       ) : view === "explore" ? (
         <Explore
@@ -4632,6 +5588,7 @@ export default function App() {
             setSelectedProvider(p);
             go("provider");
           }}
+          onOpenAi={() => setAiModalOpen(true)}
         />
       ) : view === "provider" ? (
         <ProviderProfile
@@ -4647,7 +5604,7 @@ export default function App() {
           currentUser={currentUser}
           onBookingCreated={handleBookingCreated}
         />
-      ) : view === "customer" ? (
+      ) : view === "customer" && currentUser ? (
         <CustomerDashboard
           go={go}
           currentUser={currentUser}
@@ -4657,8 +5614,9 @@ export default function App() {
           onLogout={handleLogout}
           onBookingStatusUpdated={handleBookingStatusUpdated}
           onReviewSubmitted={handleReviewSubmitted}
+          onUserUpdated={(u) => setCurrentUser(u)}
         />
-      ) : view === "pro" ? (
+      ) : view === "pro" && currentUser && (currentUser.role === "artisan" || currentUser.role === "provider" || currentUser.role === "admin") ? (
         <ProDashboard
           go={go}
           currentUser={currentUser}
@@ -4670,7 +5628,7 @@ export default function App() {
           onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
           onLogout={handleLogout}
         />
-      ) : (
+      ) : view === "admin" && currentUser && currentUser.role === "admin" ? (
         <AdminDashboard
           go={go}
           currentUser={currentUser}
@@ -4686,9 +5644,28 @@ export default function App() {
           onOpenAuth={() => { setAuthError(""); setAuthTab("login"); setAuthModalOpen(true); }}
           onLogout={handleLogout}
         />
+      ) : (
+        <Home
+          go={go}
+          providersList={providersList}
+          onSelectProvider={(p) => {
+            setSelectedProvider(p);
+            go("provider");
+          }}
+          onOpenAi={() => setAiModalOpen(true)}
+        />
       )}
 
-      <Footer go={go} onOpenOnboarding={() => setOnboardModalOpen(true)} />
+      <Footer
+        go={go}
+        onOpenOnboarding={() => setOnboardModalOpen(true)}
+        onOpenContact={() => setContactModalOpen(true)}
+      />
+
+      {/* Contact & Support Modal */}
+      {contactModalOpen && (
+        <ContactModal close={() => setContactModalOpen(false)} />
+      )}
 
       {/* Account Authentication & Registration Modal */}
       {authModalOpen && (
@@ -4777,6 +5754,28 @@ export default function App() {
           </form>
         </Modal>
       )}
+
+      {/* Floating AI Diagnostic Assistant Pill */}
+      {view !== "admin" && view !== "pro" && (
+        <button
+          type="button"
+          className="floating-ai-pill"
+          onClick={() => setAiModalOpen(true)}
+          aria-label="Open AI Repair Assistant"
+        >
+          <span className="hero-ai-sparkle">✦</span> AI Repair Assistant
+        </button>
+      )}
+
+      {/* AI Diagnostic Assistant Modal */}
+      <AiAssistantModal
+        isOpen={aiModalOpen}
+        close={() => setAiModalOpen(false)}
+        onStartBooking={handleStartBooking}
+        onExploreCategory={() => {
+          go("explore");
+        }}
+      />
     </>
   );
 }

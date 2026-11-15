@@ -1,12 +1,37 @@
 "use strict";
 /* POST /api/chat — validates the browser's request, asks Groq with the
    server-held key + server-side instructions, and returns a small
-   structured answer: { reply, service, detail }. Browser errors generic. */
+   structured answer: { reply, service, detail, providers }. Browser errors generic. */
 const modStatic = require("./static");
 const sendJson = modStatic.sendJson;
 const persona = require("./persona");
 const ai = require("./ai");
-const SERVICES = ["plumbing", "electrical", "cleaning", "carpentry", "hvac"];
+const dataStore = require("./dataStore");
+
+const SERVICES = [
+  "plumbing",
+  "electrical",
+  "carpentry",
+  "painting",
+  "masonry",
+  "cleaning",
+  "appliances",
+  "hvac",
+  "assembly"
+];
+
+const CATEGORY_KEYWORDS = {
+  plumbing: ["plumb", "pipe", "drain", "water tank", "leak", "tap"],
+  electrical: ["electr", "wiring", "socket", "breaker", "generator"],
+  carpentry: ["carpent", "wood", "cabinet", "shelf", "furniture", "door"],
+  painting: ["paint", "finishing", "wall coat"],
+  masonry: ["mason", "tile", "tiling", "brick", "paving", "plaster"],
+  cleaning: ["clean", "sanit", "wash", "scrub", "janitor"],
+  appliances: ["appliance", "fridge", "refrigerator", "washing machine", "microwave", "stove"],
+  hvac: ["hvac", "ac", "air condition", "ventilat", "cooling"],
+  assembly: ["assembl", "install", "mounting", "curtain", "tv mount"]
+};
+
 function readBody(req, maxBytes) {
   return new Promise(function (resolve, reject) {
     let size = 0;
@@ -16,6 +41,7 @@ function readBody(req, maxBytes) {
     req.on("error", reject);
   });
 }
+
 function parseAnswer(content) {
   const text = String(content || "").trim();
   const tailRe = /\{[\s\S]*\}\s*$/;
@@ -31,6 +57,66 @@ function parseAnswer(content) {
     return { reply: o.reply.trim().slice(0, 600), service: service, detail: service ? detail : "" };
   } catch (e) { return { reply: fallbackReply, service: null, detail: "" }; }
 }
+
+function matchesCategory(provider, categoryId) {
+  if (!provider || !categoryId) return false;
+  const cat = String(categoryId).toLowerCase().trim();
+  const provCat = String(provider.category || "").toLowerCase();
+  const provTrade = String(provider.trade || "").toLowerCase();
+  if (provCat === cat || provTrade === cat) return true;
+  if (provCat.includes(cat) || provTrade.includes(cat)) return true;
+
+  const keywords = CATEGORY_KEYWORDS[cat] || [cat];
+  for (const kw of keywords) {
+    if (provCat.includes(kw) || provTrade.includes(kw)) return true;
+  }
+  if (Array.isArray(provider.services)) {
+    for (const s of provider.services) {
+      const sName = String(s.name || "").toLowerCase();
+      const sDesc = String(s.description || "").toLowerCase();
+      const sCat = String(s.category || "").toLowerCase();
+      if (sCat === cat || sName.includes(cat)) return true;
+      for (const kw of keywords) {
+        if (sName.includes(kw) || sDesc.includes(kw)) return true;
+      }
+    }
+  }
+  return false;
+}
+
+function sanitizePublicProvider(p) {
+  if (!p) return null;
+  return {
+    id: p.id,
+    name: p.name,
+    trade: p.trade || p.category || "",
+    category: p.category || p.trade || "",
+    rating: typeof p.rating === "number" ? p.rating : 5.0,
+    jobs: typeof p.jobs === "number" ? p.jobs : 0,
+    price: typeof p.price === "number" ? p.price : 0,
+    area: p.area || "",
+    initials: p.initials || (p.name ? p.name.split(" ").map(w => w[0]).join("").slice(0, 2).toUpperCase() : ""),
+    color: p.color || "#829d9a",
+    image: p.image || "",
+    bio: p.bio || "",
+    services: Array.isArray(p.services) ? p.services.map(s => ({
+      name: s.name,
+      price: s.price,
+      billing: s.billing || "Fixed price",
+      description: s.description || ""
+    })) : [],
+    availability: p.availability || null
+  };
+}
+
+function getMatchingProviders(categoryId) {
+  if (!categoryId) return [];
+  const providers = dataStore.getProviders(false);
+  return providers
+    .filter(p => !p.suspended && matchesCategory(p, categoryId))
+    .map(sanitizePublicProvider);
+}
+
 async function handleChat(req, res, ctx) {
   const config = ctx.config;
   const limiter = ctx.limiter;
@@ -56,11 +142,21 @@ async function handleChat(req, res, ctx) {
   const payload = [{ role: "system", content: persona.systemPrompt() }].concat(clean);
   try {
     const content = await ai.completeGroq({ baseUrl: config.groqBaseUrl, model: config.groqModel, apiKey: config.groqKey }, payload, { timeoutMs: config.upstreamTimeoutMs });
-    return sendJson(res, 200, parseAnswer(content));
+    const parsed = parseAnswer(content);
+    const providers = parsed.service ? getMatchingProviders(parsed.service) : [];
+    return sendJson(res, 200, Object.assign({}, parsed, { providers }));
   } catch (err) {
     console.error("[chat]", err && err.code ? err.code : err);
     if (err && err.code === "BAD_KEY") return sendJson(res, 502, { error: "Server key rejected — contact the site owner." });
     return sendJson(res, 502, { error: "AI provider failed — try again." });
   }
 }
-module.exports = { handleChat: handleChat, parseAnswer: parseAnswer, SERVICES: SERVICES };
+
+module.exports = {
+  handleChat: handleChat,
+  parseAnswer: parseAnswer,
+  SERVICES: SERVICES,
+  matchesCategory: matchesCategory,
+  getMatchingProviders: getMatchingProviders,
+  sanitizePublicProvider: sanitizePublicProvider
+};

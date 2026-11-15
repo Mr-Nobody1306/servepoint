@@ -149,10 +149,144 @@ async function handleApiRequest(req, res, pathname, config) {
     return sendJson(res, 200, { ok: true });
   }
 
+  // --- Users Endpoints (FR-03) ---
+  const userItemMatch = pathname.match(/^\/api\/users\/([^/]+)$/);
+  if (userItemMatch && method === "GET") {
+    const authUser = parseAuth(req);
+    const targetUserId = decodeURIComponent(userItemMatch[1]);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required." });
+    }
+    if (authUser.id !== targetUserId && authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: You are not authorized to view this user profile." });
+    }
+    const user = dataStore.getUserById(targetUserId);
+    if (!user) return sendJson(res, 404, { error: "User not found." });
+    return sendJson(res, 200, { ok: true, user: dataStore.sanitizeUser(user) });
+  }
+
+  if (userItemMatch && (method === "PUT" || method === "PATCH")) {
+    const authUser = parseAuth(req);
+    const targetUserId = decodeURIComponent(userItemMatch[1]);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required to update profile." });
+    }
+    if (authUser.id !== targetUserId && authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: You are not authorized to update this user profile." });
+    }
+    const body = await readJsonBody(req);
+    const updates = {};
+    if (body.name !== undefined) updates.name = String(body.name).trim();
+    if (body.phone !== undefined) updates.phone = String(body.phone).trim();
+    if (body.address !== undefined) updates.address = String(body.address).trim();
+    if (body.area !== undefined) updates.area = String(body.area).trim();
+    // Only administrators can modify roles or suspension status through user endpoint
+    if (authUser.role === "admin") {
+      if (body.role !== undefined) updates.role = body.role;
+      if (body.status !== undefined) updates.status = body.status;
+    }
+
+    const updated = dataStore.updateUser(targetUserId, updates);
+    if (!updated) return sendJson(res, 404, { error: "User not found." });
+
+    // Synchronize matching provider record if user is an artisan/provider
+    const prov = dataStore.getProviderById(targetUserId);
+    if (prov) {
+      const provUpdates = {};
+      if (updates.name) provUpdates.name = updates.name;
+      if (updates.phone !== undefined) provUpdates.phone = updates.phone;
+      if (updates.area !== undefined) provUpdates.area = updates.area;
+      dataStore.updateProviderProfile(targetUserId, provUpdates);
+    }
+
+    return sendJson(res, 200, { ok: true, user: dataStore.sanitizeUser(updated) });
+  }
+
   // --- Providers Endpoints ---
   if (pathname === "/api/providers" && method === "GET") {
-    const includePending = url.searchParams.get("includePending") === "true";
-    const providers = dataStore.getProviders(includePending);
+    const wantsPending = url.searchParams.get("includePending") === "true";
+    if (wantsPending) {
+      const authUser = parseAuth(req);
+      if (!authUser || authUser.role !== "admin") {
+        return sendJson(res, 403, { error: "Forbidden: Administrator privileges required to access pending providers." });
+      }
+    }
+    const includePending = wantsPending;
+    const category = url.searchParams.get("category");
+    const minRating = url.searchParams.get("minRating");
+    const area = url.searchParams.get("area");
+    const search = url.searchParams.get("search") || url.searchParams.get("q");
+
+    let parsedMinRating = 0;
+    if (minRating !== null && minRating !== undefined && minRating !== "") {
+      const num = Number(minRating);
+      if (isNaN(num) || !Number.isFinite(num) || num < 0 || num > 5) {
+        return sendJson(res, 400, { error: "minRating must be a valid number between 0 and 5." });
+      }
+      parsedMinRating = num;
+    }
+
+    let providers = dataStore.getProviders(includePending);
+
+    // FR-07: Filter by Category
+    if (category && category !== "All home services" && category !== "All" && category !== "all") {
+      const catLow = category.trim().toLowerCase();
+      providers = providers.filter(p => {
+        const pCat = (p.category || "").toLowerCase();
+        const pTrade = (p.trade || "").toLowerCase();
+        return pCat === catLow ||
+               pTrade === catLow ||
+               pCat.includes(catLow) ||
+               pTrade.includes(catLow) ||
+               (catLow === "carpentry" && (pCat.includes("carpentry") || pTrade.includes("woodwork"))) ||
+               (catLow === "electrical" && (pCat.includes("electrical") || pTrade.includes("generator"))) ||
+               (catLow === "cleaning" && (pCat.includes("cleaning") || pTrade.includes("sanitation"))) ||
+               (catLow === "painting" && (pCat.includes("paint") || pTrade.includes("paint"))) ||
+               (catLow === "masonry" && (pCat.includes("masonry") || pTrade.includes("tile") || pTrade.includes("tiling"))) ||
+               (catLow === "appliance repairs" && (pCat.includes("appliance") || pTrade.includes("appliance"))) ||
+               (catLow === "hvac/ventilation" && (pCat.includes("hvac") || pCat.includes("air") || pTrade.includes("ac"))) ||
+               (p.services || []).some(s => (s.category || "").toLowerCase().includes(catLow) || (s.name || "").toLowerCase().includes(catLow));
+      });
+    }
+
+    // FR-07: Filter by Minimum Rating
+    if (parsedMinRating > 0) {
+      providers = providers.filter(p => {
+        if (p.rating === undefined || p.rating === null || p.rating === "") return false;
+        const r = Number(p.rating);
+        return !isNaN(r) && r >= parsedMinRating;
+      });
+    }
+
+    // FR-07: Filter by Service Area (case-insensitive, whitespace-tolerant, multi-area aware)
+    if (area && area !== "All areas" && area !== "All" && area !== "all") {
+      const target = area.trim().toLowerCase();
+      if (target) {
+        providers = providers.filter(p => {
+          const provArea = (p.area || "").trim().toLowerCase();
+          if (!provArea) return false;
+          if (provArea === target || provArea.includes(target) || target.includes(provArea)) return true;
+          const tokens = provArea.split(/[,/;|]+/).map(t => t.trim()).filter(Boolean);
+          if (tokens.some(t => t === target || t.includes(target) || target.includes(t))) return true;
+          if (Array.isArray(p.areas)) {
+            const areaTokens = p.areas.map(a => String(a).trim().toLowerCase()).filter(Boolean);
+            if (areaTokens.some(a => a === target || a.includes(target) || target.includes(a))) return true;
+          }
+          return false;
+        });
+      }
+    }
+
+    // FR-07: Filter by Search Query
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
+      providers = providers.filter(p => {
+        const servicesText = (p.services || []).map(s => `${s.name} ${s.description || ""} ${s.category || ""}`).join(" ");
+        const combined = `${p.name} ${p.trade} ${p.category} ${p.area || ""} ${p.bio || ""} ${servicesText}`.toLowerCase();
+        return combined.includes(q);
+      });
+    }
+
     return sendJson(res, 200, { providers });
   }
 
@@ -163,6 +297,74 @@ async function handleApiRequest(req, res, pathname, config) {
     }
     const provider = dataStore.createProvider(body);
     return sendJson(res, 201, { ok: true, provider });
+  }
+
+  const provItemMatch = pathname.match(/^\/api\/providers\/([^/]+)$/);
+  if (provItemMatch && method === "GET") {
+    const providerId = decodeURIComponent(provItemMatch[1]);
+    const provider = dataStore.getProviderById(providerId);
+    if (!provider) return sendJson(res, 404, { error: "Provider not found." });
+    return sendJson(res, 200, { ok: true, provider });
+  }
+
+  if (provItemMatch && (method === "PUT" || method === "PATCH")) {
+    const authUser = parseAuth(req);
+    const providerId = decodeURIComponent(provItemMatch[1]);
+    if (!authUser) {
+      return sendJson(res, 401, { error: "Authentication required to update provider profile." });
+    }
+    if (authUser.id !== providerId && authUser.role !== "admin") {
+      return sendJson(res, 403, { error: "Forbidden: You are not authorized to update this provider profile." });
+    }
+    const body = await readJsonBody(req);
+    const updates = {};
+    if (body.name !== undefined) {
+      const nameTrimmed = String(body.name).trim();
+      if (!nameTrimmed) {
+        return sendJson(res, 400, { error: "Provider name cannot be empty." });
+      }
+      if (nameTrimmed.length > 100) {
+        return sendJson(res, 400, { error: "Provider name must not exceed 100 characters." });
+      }
+      updates.name = nameTrimmed;
+    }
+    if (body.trade !== undefined) updates.trade = String(body.trade).trim();
+    if (body.category !== undefined) updates.category = String(body.category).trim();
+    if (body.bio !== undefined) updates.bio = String(body.bio).trim();
+    if (body.area !== undefined) updates.area = String(body.area).trim();
+    if (body.phone !== undefined) updates.phone = String(body.phone).trim();
+    if (body.image !== undefined) updates.image = String(body.image).trim();
+    if (body.price !== undefined) {
+      if (body.price === null || body.price === "" || typeof body.price === "boolean") {
+        return sendJson(res, 400, { error: "Provider price must be a valid non-negative number." });
+      }
+      const priceNum = Number(body.price);
+      if (isNaN(priceNum) || !Number.isFinite(priceNum) || priceNum < 0) {
+        return sendJson(res, 400, { error: "Provider price must be a valid non-negative number." });
+      }
+      updates.price = priceNum;
+    }
+    if (body.supportedBookingMethods !== undefined && Array.isArray(body.supportedBookingMethods)) {
+      updates.supportedBookingMethods = body.supportedBookingMethods;
+    }
+    if (body.acceptInstantBookings !== undefined) {
+      updates.acceptInstantBookings = Boolean(body.acceptInstantBookings);
+    }
+
+    const updated = dataStore.updateProviderProfile(providerId, updates);
+    if (!updated) return sendJson(res, 404, { error: "Provider not found." });
+
+    // Also synchronize user profile contact fields if user exists
+    const matchingUser = dataStore.getUserById(providerId);
+    if (matchingUser) {
+      const uUpdates = {};
+      if (updates.name) uUpdates.name = updates.name;
+      if (updates.phone !== undefined) uUpdates.phone = updates.phone;
+      if (updates.area !== undefined) uUpdates.area = updates.area;
+      dataStore.updateUser(providerId, uUpdates);
+    }
+
+    return sendJson(res, 200, { ok: true, provider: updated });
   }
 
   const verifyMatch = pathname.match(/^\/api\/providers\/([^/]+)\/verify$/);
@@ -203,6 +405,16 @@ async function handleApiRequest(req, res, pathname, config) {
     if (!authUser || (authUser.role !== "admin" && authUser.id !== providerId)) {
       return sendJson(res, 403, { error: "Forbidden: You are not authorized to modify this provider's services." });
     }
+    const targetProv = dataStore.getProviderById(providerId);
+    if (!targetProv) return sendJson(res, 404, { error: "Provider not found." });
+    if (authUser.role !== "admin") {
+      if (targetProv.status !== "approved") {
+        return sendJson(res, 403, { error: "Forbidden: Provider account must be approved by an administrator before publishing services." });
+      }
+      if (targetProv.suspended) {
+        return sendJson(res, 403, { error: "Forbidden: Suspended providers cannot publish or modify services." });
+      }
+    }
     const body = await readJsonBody(req);
     if (!body.name || !String(body.name).trim()) {
       return sendJson(res, 400, { error: "Service name is required." });
@@ -223,6 +435,16 @@ async function handleApiRequest(req, res, pathname, config) {
     if (!authUser || (authUser.role !== "admin" && authUser.id !== providerId)) {
       return sendJson(res, 403, { error: "Forbidden: You are not authorized to modify this provider's services." });
     }
+    const targetProv = dataStore.getProviderById(providerId);
+    if (!targetProv) return sendJson(res, 404, { error: "Provider not found." });
+    if (authUser.role !== "admin") {
+      if (targetProv.status !== "approved") {
+        return sendJson(res, 403, { error: "Forbidden: Provider account must be approved by an administrator before modifying services." });
+      }
+      if (targetProv.suspended) {
+        return sendJson(res, 403, { error: "Forbidden: Suspended providers cannot publish or modify services." });
+      }
+    }
     const body = await readJsonBody(req);
     const updated = dataStore.updateProviderService(providerId, serviceId, body);
     if (!updated) return sendJson(res, 404, { error: "Provider or service not found." });
@@ -235,6 +457,16 @@ async function handleApiRequest(req, res, pathname, config) {
     const serviceId = decodeURIComponent(provServiceItemMatch[2]);
     if (!authUser || (authUser.role !== "admin" && authUser.id !== providerId)) {
       return sendJson(res, 403, { error: "Forbidden: You are not authorized to delete this provider's services." });
+    }
+    const targetProv = dataStore.getProviderById(providerId);
+    if (!targetProv) return sendJson(res, 404, { error: "Provider not found." });
+    if (authUser.role !== "admin") {
+      if (targetProv.status !== "approved") {
+        return sendJson(res, 403, { error: "Forbidden: Provider account must be approved by an administrator before deleting services." });
+      }
+      if (targetProv.suspended) {
+        return sendJson(res, 403, { error: "Forbidden: Suspended providers cannot delete services." });
+      }
     }
     const updated = dataStore.deleteProviderService(providerId, serviceId);
     if (!updated) return sendJson(res, 404, { error: "Provider or service not found." });
@@ -305,6 +537,11 @@ async function handleApiRequest(req, res, pathname, config) {
       return sendJson(res, 404, { error: "Service provider not found." });
     }
 
+    // Provider approval guard: unapproved (pending/declined) providers cannot receive bookings
+    if (provider.status !== "approved") {
+      return sendJson(res, 403, { error: "Forbidden: This service provider has not been approved to receive bookings." });
+    }
+
     // Provider suspension guard
     if (provider.suspended) {
       return sendJson(res, 400, { error: "This service provider is currently suspended and cannot receive new service requests." });
@@ -357,6 +594,16 @@ async function handleApiRequest(req, res, pathname, config) {
     // Check instant booking vs request-based booking
     const isInstant = body.bookingType === "instant" || body.type === "instant";
     if (isInstant) {
+      // FR-13: Validate provider supported booking methods
+      const acceptsInstant = provider.acceptInstantBookings !== false &&
+        (!provider.supportedBookingMethods || provider.supportedBookingMethods.includes("instant")) &&
+        (!provider.availability || provider.availability.acceptInstantBookings !== false);
+      if (!acceptsInstant) {
+        return sendJson(res, 400, {
+          error: `${provider.name} currently accepts request-based bookings only. Please submit a booking request instead of an instant booking.`
+        });
+      }
+
       const availCheck = dataStore.checkProviderSlotAvailability(provider.id, date, time);
       if (!availCheck.ok) {
         return sendJson(res, 400, { error: availCheck.error });

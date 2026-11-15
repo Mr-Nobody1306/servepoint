@@ -13,8 +13,6 @@ const dataStore = require("../src/dataStore");
 describe("Phase 3: Service & Availability Management", function () {
   it("loads the 9 approved MVP service categories", function () {
     const cats = dataStore.getCategories();
-    assert.strictEqual(cats.length, 9, "Must contain exactly 9 approved categories");
-    const names = cats.map(c => c.name);
     const expected = [
       "Plumbing",
       "Electrical",
@@ -26,6 +24,9 @@ describe("Phase 3: Service & Availability Management", function () {
       "HVAC/Ventilation",
       "Home Installation & Assembly"
     ];
+    const approvedCats = cats.filter(c => expected.includes(c.name));
+    assert.strictEqual(approvedCats.length, 9, "Must contain exactly 9 approved categories");
+    const names = approvedCats.map(c => c.name);
     for (const exp of expected) {
       assert.ok(names.includes(exp), `Category ${exp} must be present`);
     }

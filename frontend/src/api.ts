@@ -21,6 +21,8 @@ export interface ProviderAvailability {
   workingDays: string[];
   workingHours: string;
   emergencyAvailable?: boolean;
+  acceptInstantBookings?: boolean;
+  supportedBookingMethods?: ("instant" | "request")[];
 }
 
 export interface ProviderService {
@@ -48,6 +50,8 @@ export interface Provider {
   color?: string;
   image?: string;
   bio?: string;
+  acceptInstantBookings?: boolean;
+  supportedBookingMethods?: ("instant" | "request")[];
   services?: ProviderService[];
   availability?: ProviderAvailability;
   documents?: {
@@ -126,6 +130,19 @@ export interface PlatformStats {
   verificationQueue: Provider[];
 }
 
+export interface ChatMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface ChatResponse {
+  reply: string;
+  service: string | null;
+  detail: string;
+  providers?: Provider[];
+  error?: string;
+}
+
 const API_BASE = "";
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -190,9 +207,60 @@ export const api = {
     return { ok: true };
   },
 
-  // Providers
-  async getProviders(includePending = false): Promise<{ providers: Provider[] }> {
-    return request<{ providers: Provider[] }>(`/api/providers${includePending ? "?includePending=true" : ""}`);
+  // Users (FR-03)
+  async updateUserProfile(userId: string, data: Partial<User>): Promise<{ ok: boolean; user: User }> {
+    const res = await request<{ ok: boolean; user: User }>(`/api/users/${encodeURIComponent(userId)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+    if (res.ok && res.user) {
+      const stored = localStorage.getItem("servepoint_user");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          if (parsed.id === userId) {
+            localStorage.setItem("servepoint_user", JSON.stringify({ ...parsed, ...res.user }));
+          }
+        } catch (e) {}
+      }
+    }
+    return res;
+  },
+
+  // Providers (FR-04, FR-09, FR-13)
+  async getProviderById(providerId: string): Promise<{ ok: boolean; provider: Provider }> {
+    return request<{ ok: boolean; provider: Provider }>(`/api/providers/${encodeURIComponent(providerId)}`);
+  },
+
+  async updateProviderProfile(providerId: string, data: Partial<Provider>): Promise<{ ok: boolean; provider: Provider }> {
+    return request<{ ok: boolean; provider: Provider }>(`/api/providers/${encodeURIComponent(providerId)}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+  async getProviders(
+    options?: boolean | { includePending?: boolean; category?: string; minRating?: number; area?: string; search?: string }
+  ): Promise<{ providers: Provider[] }> {
+    const params = new URLSearchParams();
+    if (typeof options === "boolean") {
+      if (options) params.set("includePending", "true");
+    } else if (options) {
+      if (options.includePending) params.set("includePending", "true");
+      if (options.category && options.category !== "All home services" && options.category !== "All") {
+        params.set("category", options.category);
+      }
+      if (options.minRating !== undefined && options.minRating > 0) {
+        params.set("minRating", String(options.minRating));
+      }
+      if (options.area && options.area !== "All areas" && options.area !== "All") {
+        params.set("area", options.area);
+      }
+      if (options.search && options.search.trim()) {
+        params.set("search", options.search.trim());
+      }
+    }
+    const qStr = params.toString();
+    return request<{ providers: Provider[] }>(`/api/providers${qStr ? `?${qStr}` : ""}`);
   },
 
   async onboardProvider(provider: Partial<Provider>): Promise<{ ok: boolean; provider: Provider }> {
@@ -348,6 +416,14 @@ export const api = {
     return request<{ ok: boolean; review: Review; providerRating: number }>("/api/reviews", {
       method: "POST",
       body: JSON.stringify(payload),
+    });
+  },
+
+  // AI Diagnostic Chat (FR-27 to FR-33)
+  async sendChatMessage(messages: ChatMessage[]): Promise<ChatResponse> {
+    return request<ChatResponse>("/api/chat", {
+      method: "POST",
+      body: JSON.stringify({ messages }),
     });
   },
 };

@@ -17,11 +17,12 @@ function loadDotEnv(file) {
       const k = t.slice(0, i).trim();
       let v = t.slice(i + 1).trim();
       if (v.length >= 2 && ((v.charAt(0) === '"' && v.slice(-1) === '"') || (v.charAt(0) === "'" && v.slice(-1) === "'"))) v = v.slice(1, -1);
-      if (!(k in process.env)) process.env[k] = v;
+      if (!(k in process.env) || process.env[k] === "") process.env[k] = v;
     }
   } catch (err) { console.error("[config] could not read .env:", err.message); }
 }
 function loadConfig() {
+  loadDotEnv(path.join(ROOT_DIR, "..", ".env"));
   loadDotEnv(path.join(ROOT_DIR, ".env"));
   const cfg = {
     port: Number(process.env.PORT || 8000),

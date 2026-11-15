@@ -58,7 +58,15 @@ describe("Phase 4: Booking System & Status Tracking", function () {
     }
     const p = dataStore.getProviderById("kwame");
     if (p) {
+      p.status = "approved";
       p.suspended = false;
+      p.acceptInstantBookings = true;
+      p.supportedBookingMethods = ["instant", "request"];
+      if (p.availability) {
+        p.availability.acceptInstantBookings = true;
+        p.availability.supportedBookingMethods = ["instant", "request"];
+      }
+      dataStore.save();
     }
   });
 

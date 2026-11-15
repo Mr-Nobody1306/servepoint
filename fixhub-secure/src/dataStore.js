@@ -616,7 +616,7 @@ class DataStore {
   getProviders(includePending = false) {
     const all = this.data.providers || [];
     if (includePending) return all;
-    return all.filter(p => p.status === "approved");
+    return all.filter(p => p.status === "approved" && !p.suspended);
   }
   getProviderById(id) {
     return (this.data.providers || []).find(p => p.id === id || p.name.toLowerCase() === id.toLowerCase());
@@ -645,6 +645,29 @@ class DataStore {
     this.data.providers.push(newProv);
     this.save();
     return newProv;
+  }
+  updateProviderProfile(providerId, updates) {
+    const p = this.getProviderById(providerId);
+    if (!p) return null;
+    const allowed = [
+      "name", "trade", "category", "bio", "area", "phone",
+      "image", "price", "supportedBookingMethods", "acceptInstantBookings"
+    ];
+    for (const key of allowed) {
+      if (updates[key] !== undefined) {
+        p[key] = updates[key];
+      }
+    }
+    if (updates.acceptInstantBookings !== undefined) {
+      p.availability = p.availability || {};
+      p.availability.acceptInstantBookings = Boolean(updates.acceptInstantBookings);
+    }
+    if (updates.supportedBookingMethods !== undefined) {
+      p.availability = p.availability || {};
+      p.availability.supportedBookingMethods = updates.supportedBookingMethods;
+    }
+    this.save();
+    return p;
   }
   updateProviderStatus(id, status) {
     const p = this.getProviderById(id);
@@ -713,8 +736,15 @@ class DataStore {
       acceptingBookings: true,
       workingDays: ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
       workingHours: "08:00 - 17:00",
-      emergencyAvailable: false
+      emergencyAvailable: false,
+      acceptInstantBookings: true
     }, p.availability || {}, availability);
+    if (availability.acceptInstantBookings !== undefined) {
+      p.acceptInstantBookings = Boolean(availability.acceptInstantBookings);
+    }
+    if (availability.supportedBookingMethods !== undefined) {
+      p.supportedBookingMethods = availability.supportedBookingMethods;
+    }
     this.save();
     return p.availability;
   }
@@ -769,8 +799,16 @@ class DataStore {
     return { ok: true };
   }
   createBooking(bookingData) {
-    const nextNum = Math.floor(2842 + Math.random() * 7000);
-    const id = bookingData.id || `SP-${nextNum}`;
+    let id = bookingData.id;
+    if (!id) {
+      do {
+        const nextNum = Math.floor(2842 + Math.random() * 900000);
+        id = `SP-${nextNum}`;
+      } while (
+        (this.data.bookings || []).some(b => b.id === id) ||
+        (this.data.reviews || []).some(r => r.bookingId === id)
+      );
+    }
     const status = bookingData.status || (bookingData.bookingType === "instant" ? "accepted" : "pending");
     let customerName = bookingData.customerName;
     if (!customerName && bookingData.customerId) {
