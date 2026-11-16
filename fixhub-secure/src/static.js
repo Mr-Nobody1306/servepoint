@@ -24,14 +24,14 @@ function configureHeaders(cfg) {
 }
 function contentSecurityPolicy() {
   return "default-src 'self';"
-    + " script-src 'self' https://js.paystack.co;"
-    + " style-src 'self' https://fonts.googleapis.com https://paystack.com;"
+    + " script-src 'self' https://js.paystack.co https://accounts.google.com/gsi/client;"
+    + " style-src 'self' https://fonts.googleapis.com https://paystack.com https://accounts.google.com/gsi/style;"
     + " style-src-attr 'unsafe-inline';"
     + " font-src 'self' https://fonts.gstatic.com;"
-    + " img-src 'self' data: blob: https://images.unsplash.com;"
+    + " img-src 'self' data: blob: https://images.unsplash.com https://*.googleusercontent.com;"
     + " media-src 'self' blob:;"
-    + " connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net https://get.geojs.io https://js.paystack.co https://api.paystack.co;"
-    + " frame-src 'self' https://js.paystack.co https://checkout.paystack.com;"
+    + " connect-src 'self' https://*.supabase.co https://api.bigdatacloud.net https://get.geojs.io https://js.paystack.co https://api.paystack.co https://accounts.google.com/gsi/;"
+    + " frame-src 'self' https://js.paystack.co https://checkout.paystack.com https://accounts.google.com/gsi/;"
     + " object-src 'none';"
     + " base-uri 'self';"
     + " form-action 'self';"
@@ -76,6 +76,9 @@ function serveStatic(req, res, publicDir, pathname) {
           if (!err2 && st2.isFile()) {
             const headers = securityHeaders();
             headers["Content-Type"] = "text/html; charset=utf-8";
+            headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+            headers["Pragma"] = "no-cache";
+            headers["Expires"] = "0";
             res.writeHead(200, headers);
             return fs.createReadStream(indexFile).pipe(res);
           }
@@ -89,6 +92,11 @@ function serveStatic(req, res, publicDir, pathname) {
     const type = MIME[path.extname(file).toLowerCase()] || "application/octet-stream";
     const headers = securityHeaders();
     headers["Content-Type"] = type;
+    if (file.endsWith("index.html")) {
+      headers["Cache-Control"] = "no-cache, no-store, must-revalidate";
+      headers["Pragma"] = "no-cache";
+      headers["Expires"] = "0";
+    }
     res.writeHead(200, headers);
     fs.createReadStream(file).pipe(res);
   });

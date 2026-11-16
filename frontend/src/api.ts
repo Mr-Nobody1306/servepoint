@@ -156,13 +156,17 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
   }
 
   const response = await fetch(`${API_BASE}${endpoint}`, {
+    credentials: "same-origin",
     ...options,
     headers,
   });
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
-    throw new Error(errorBody.error || `Request failed with status ${response.status}`);
+    const err: any = new Error(errorBody.error || `Request failed with status ${response.status}`);
+    err.status = response.status;
+    err.code = errorBody.code;
+    throw err;
   }
 
   return response.json();
@@ -205,6 +209,39 @@ export const api = {
     localStorage.removeItem("servepoint_token");
     localStorage.removeItem("servepoint_user");
     return { ok: true };
+  },
+
+  async getAuthConfig(): Promise<{ googleClientId: string }> {
+    return request<{ googleClientId: string }>("/api/auth/config");
+  },
+
+  async getGoogleChallenge(): Promise<{ ok: boolean; nonce: string; challengeId: string; expiresAt: number }> {
+    return request<{ ok: boolean; nonce: string; challengeId: string; expiresAt: number }>("/api/auth/google/challenge", {
+      method: "POST",
+    });
+  },
+
+  async loginWithGoogle(payload: {
+    credential: string;
+    challengeId?: string;
+    role?: "customer" | "provider" | "artisan";
+    name?: string;
+    phone?: string;
+    trade?: string;
+    area?: string;
+    address?: string;
+    price?: number;
+    linkPassword?: string;
+  }): Promise<{ ok: boolean; user: User; token: string; isNewUser?: boolean; linked?: boolean }> {
+    const res = await request<{ ok: boolean; user: User; token: string; isNewUser?: boolean; linked?: boolean }>("/api/auth/google", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    if (res.token) {
+      localStorage.setItem("servepoint_token", res.token);
+      localStorage.setItem("servepoint_user", JSON.stringify(res.user));
+    }
+    return res;
   },
 
   // Users (FR-03)

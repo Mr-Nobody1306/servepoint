@@ -5,6 +5,15 @@
  */
 const { sendJson } = require("./static");
 const dataStore = require("./dataStore");
+const {
+  verifyGoogleIdToken,
+  createAuthChallenge,
+  getChallenge,
+  getChallengeByNonce,
+  consumeChallenge,
+  isAllowedOrigin,
+  accountLinkRateLimiter,
+} = require("./googleAuth");
 
 const MAX_BODY_BYTES = 64 * 1024;
 
@@ -147,6 +156,256 @@ async function handleApiRequest(req, res, pathname, config) {
       dataStore.deleteSession(token);
     }
     return sendJson(res, 200, { ok: true });
+  }
+
+  // --- Google OAuth Config Endpoint ---
+  if (pathname === "/api/auth/config" && method === "GET") {
+    const clientId = (config && config.googleClientId) || process.env.GOOGLE_CLIENT_ID || "820543012741-h79394n4pul2dj00v446k53qu419lkjp.apps.googleusercontent.com";
+    return sendJson(res, 200, { googleClientId: clientId });
+  }
+
+  // --- Google OAuth Challenge / Nonce Issuance ---
+  if ((pathname === "/api/auth/google/challenge" || pathname === "/api/auth/google/nonce") && (method === "POST" || method === "GET")) {
+    const origin = req.headers["origin"];
+    if (origin && !isAllowedOrigin(origin)) {
+      return sendJson(res, 403, { error: `Forbidden: Request origin '${origin}' is not authorized.` });
+    }
+
+    const challenge = createAuthChallenge({ origin: origin || null });
+    const isSecure = req.headers["x-forwarded-proto"] === "https";
+    const cookieHeader = `sp_auth_challenge=${encodeURIComponent(challenge.id)}; Path=/api/auth; HttpOnly; SameSite=Lax${isSecure ? "; Secure" : ""}`;
+    res.setHeader("Set-Cookie", cookieHeader);
+    return sendJson(res, 200, {
+      ok: true,
+      nonce: challenge.nonce,
+      challengeId: challenge.id,
+      expiresAt: challenge.expiresAt
+    });
+  }
+
+  // --- Google OAuth Sign-in & Registration ---
+  if (pathname === "/api/auth/google" && method === "POST") {
+    // 1. Origin and CSRF validation
+    const origin = req.headers["origin"];
+    if (!origin) {
+      return sendJson(res, 403, { error: "Forbidden: Missing request Origin header." });
+    }
+    if (!isAllowedOrigin(origin)) {
+      return sendJson(res, 403, { error: `Forbidden: Request origin '${origin}' is not authorized.` });
+    }
+
+    const expectedAudience = (config && config.googleClientId) || process.env.GOOGLE_CLIENT_ID || "820543012741-h79394n4pul2dj00v446k53qu419lkjp.apps.googleusercontent.com";
+    if (!expectedAudience) {
+      return sendJson(res, 503, { error: "Google OAuth is not configured on this server (GOOGLE_CLIENT_ID missing)." });
+    }
+
+    const body = await readJsonBody(req);
+    const credential = body.credential || body.idToken;
+    if (!credential) {
+      return sendJson(res, 400, { error: "Google credential ID token is required." });
+    }
+
+    // 2. Verify Google ID token
+    let payload;
+    try {
+      payload = await verifyGoogleIdToken(credential, expectedAudience);
+    } catch (err) {
+      return sendJson(res, err.statusCode || 401, { error: err.message || "Invalid Google token." });
+    }
+
+    // 3. Validate Nonce claim in Google ID token
+    if (!payload.nonce) {
+      return sendJson(res, 400, { error: "Google ID token is missing the required security nonce." });
+    }
+
+    // 4. Enforce mandatory challenge cookie
+    let cookieChallengeId = null;
+    const cookieHeader = req.headers["cookie"] || "";
+    const cookieMatch = cookieHeader.match(/(?:^|;\s*)sp_auth_challenge=([^;]+)/);
+    if (cookieMatch) {
+      cookieChallengeId = decodeURIComponent(cookieMatch[1].trim());
+    }
+    if (!cookieChallengeId) {
+      return sendJson(res, 401, { error: "Missing required security challenge cookie." });
+    }
+
+    // 5. Enforce mandatory challenge ID in request body/header and verify exact match
+    const bodyChallengeId = body.challengeId || req.headers["x-auth-challenge"] || null;
+    if (!bodyChallengeId) {
+      return sendJson(res, 401, { error: "Missing required security challenge ID." });
+    }
+    if (cookieChallengeId !== bodyChallengeId) {
+      return sendJson(res, 401, { error: "Security challenge session mismatch (possible CSRF attack)." });
+    }
+
+    // 6. Retrieve challenge strictly by verified cookie-bound challenge ID
+    const challenge = getChallenge(cookieChallengeId);
+    if (!challenge) {
+      return sendJson(res, 401, { error: "Unrecognized or invalid security nonce." });
+    }
+
+    if (challenge.consumed) {
+      return sendJson(res, 401, { error: "Security nonce has already been consumed (replay attack detected)." });
+    }
+
+    if (Date.now() > challenge.expiresAt) {
+      return sendJson(res, 401, { error: "Security nonce has expired. Please refresh and try again." });
+    }
+
+    if (payload.nonce !== challenge.nonce) {
+      return sendJson(res, 401, { error: "Security nonce mismatch in Google ID token." });
+    }
+
+    if (challenge.origin && challenge.origin !== origin) {
+      return sendJson(res, 403, { error: "Origin mismatch for security challenge." });
+    }
+
+    const googleId = payload.sub;
+    const email = String(payload.email || "").trim().toLowerCase();
+    const name = String(payload.name || payload.given_name || email.split("@")[0]).trim();
+
+    // 1. Returning user with this Google ID (Returning Google user)
+    let user = dataStore.getUserByGoogleId(googleId);
+    if (user) {
+      if (user.role === "admin") {
+        consumeChallenge(challenge.id);
+        return sendJson(res, 403, {
+          error: "Administrator accounts must authenticate using direct administrator credentials."
+        });
+      }
+      if (user.status === "suspended" || user.suspended) {
+        consumeChallenge(challenge.id);
+        return sendJson(res, 403, { error: "Account suspended: Your account has been suspended by an administrator." });
+      }
+      consumeChallenge(challenge.id);
+      const token = dataStore.createSession(user);
+      return sendJson(res, 200, { ok: true, user: dataStore.sanitizeUser(user), token, isNewUser: false });
+    }
+
+    // 2. Existing user with matching email but unlinked Google ID (Collision protection)
+    const existingUser = dataStore.getUserByEmail(email);
+    if (existingUser) {
+      if (existingUser.role === "admin") {
+        consumeChallenge(challenge.id);
+        return sendJson(res, 403, {
+          error: "Administrator accounts must authenticate using direct administrator credentials."
+        });
+      }
+      if (existingUser.status === "suspended" || existingUser.suspended) {
+        consumeChallenge(challenge.id);
+        return sendJson(res, 403, { error: "Account suspended: Your account has been suspended by an administrator." });
+      }
+
+      // Secure linking when existing password is provided
+      if (body.linkPassword) {
+        const clientIp = (req.headers["x-forwarded-for"] || (req.socket && req.socket.remoteAddress) || "127.0.0.1").split(",")[0].trim();
+        const rateLimitKey = `${clientIp}:${email}`;
+
+        if (accountLinkRateLimiter.checkLimit(rateLimitKey)) {
+          const retryAfter = accountLinkRateLimiter.getRemainingSeconds(rateLimitKey);
+          res.setHeader("Retry-After", String(retryAfter));
+          return sendJson(res, 429, {
+            error: "Too many failed attempts. Please try again later.",
+            code: "TOO_MANY_ATTEMPTS",
+            retryAfterSeconds: retryAfter
+          });
+        }
+
+        const passwordMatches = Boolean(
+          existingUser.passwordHash &&
+          dataStore.verifyPassword(body.linkPassword, existingUser.passwordHash, existingUser.passwordSalt)
+        );
+
+        if (!passwordMatches) {
+          accountLinkRateLimiter.recordFailure(rateLimitKey);
+          return sendJson(res, 401, {
+            error: "Invalid credentials.",
+            code: "INVALID_LINK_PASSWORD"
+          });
+        }
+
+        // Linking succeeded: reset rate limiter and consume challenge
+        accountLinkRateLimiter.reset(rateLimitKey);
+        consumeChallenge(challenge.id);
+
+        existingUser.googleId = googleId;
+        existingUser.authProvider = existingUser.authProvider ? `${existingUser.authProvider},google` : "local,google";
+        dataStore.save();
+        const token = dataStore.createSession(existingUser);
+        return sendJson(res, 200, {
+          ok: true,
+          user: dataStore.sanitizeUser(existingUser),
+          token,
+          isNewUser: false,
+          linked: true
+        });
+      }
+
+      // Unlinked account takeover prevention
+      return sendJson(res, 409, {
+        error: "An account with this email already exists. Please enter your account password to securely link your Google account.",
+        code: "ACCOUNT_EXISTS_UNLINKED",
+        email: existingUser.email
+      });
+    }
+
+    // 3. New Google user registration
+    let role = String(body.role || "customer").trim().toLowerCase();
+    if (role === "admin") {
+      consumeChallenge(challenge.id);
+      return sendJson(res, 403, { error: "Forbidden: Administrator accounts cannot be created via Google authentication." });
+    }
+    if (role === "provider" || role === "service provider") {
+      role = "artisan";
+    }
+    if (role !== "customer" && role !== "artisan") {
+      role = "customer";
+    }
+
+    const trade = role === "artisan" ? String(body.trade || "Carpentry & Woodwork").trim() : null;
+    const serviceArea = role === "artisan" ? String(body.area || "Accra").trim() : null;
+    if (role === "artisan" && (!trade || !serviceArea)) {
+      consumeChallenge(challenge.id);
+      return sendJson(res, 400, {
+        error: "Trade and service area are required for provider registration."
+      });
+    }
+
+    consumeChallenge(challenge.id);
+    const newUser = dataStore.createUser({
+      name: String(body.name || name).trim(),
+      email,
+      phone: body.phone ? String(body.phone).trim() : "",
+      role,
+      googleId,
+      authProvider: "google",
+      trade,
+      area: serviceArea || "Accra",
+      address: body.address ? String(body.address).trim() : ""
+    });
+
+    // If an artisan registers, create their provider listing with status 'pending'
+    if (role === "artisan") {
+      dataStore.createProvider({
+        id: newUser.id,
+        name: newUser.name,
+        trade: newUser.trade || "Carpentry & Woodwork",
+        category: newUser.trade || "Carpentry & Woodwork",
+        phone: newUser.phone,
+        area: newUser.area,
+        price: body.price ? Number(body.price) : 350,
+        status: "pending",
+        bio: body.bio || `Vetted independent artisan specializing in ${newUser.trade || "home maintenance"}.`
+      });
+    }
+
+    const token = dataStore.createSession(newUser);
+    return sendJson(res, 201, {
+      ok: true,
+      user: dataStore.sanitizeUser(newUser),
+      token,
+      isNewUser: true
+    });
   }
 
   // --- Users Endpoints (FR-03) ---

@@ -515,6 +515,10 @@ class DataStore {
     const low = email.toLowerCase().trim();
     return this.getUsers().find(u => u.email && u.email.toLowerCase() === low);
   }
+  getUserByGoogleId(googleId) {
+    if (!googleId) return null;
+    return this.getUsers().find(u => u.googleId === googleId);
+  }
   sanitizeUser(user) {
     if (!user) return null;
     const { passwordHash, passwordSalt, ...safe } = user;

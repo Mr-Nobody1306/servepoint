@@ -33,6 +33,7 @@ function loadConfig() {
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY || "",
     paystackSecretKey: process.env.PAYSTACK_SECRET_KEY || "",
+    googleClientId: process.env.GOOGLE_CLIENT_ID || "820543012741-h79394n4pul2dj00v446k53qu419lkjp.apps.googleusercontent.com",
     rootDir: ROOT_DIR,
     publicDir: path.join(ROOT_DIR, "public"),
     maxBodyBytes: 64 * 1024,

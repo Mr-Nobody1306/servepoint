@@ -22,6 +22,16 @@
 * {
   box-sizing: border-box;
 }
+/* Google Identity Services button overrides to prevent SVG explosion */
+.nsm7Bb-HzV7m-LgbsSe svg,
+.LgbsSe-Bz112c,
+[role="button"] svg.LgbsSe-Bz112c {
+  width: 18px !important;
+  height: 18px !important;
+  max-width: 18px !important;
+  max-height: 18px !important;
+  display: inline-block !important;
+}
 html {
   scroll-behavior: smooth;
   overflow-x: hidden;

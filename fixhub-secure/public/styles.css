@@ -533,3 +533,13 @@ body.nav-open #sidenav { transform: none; }
 .avatarbtn-lg { width: 52px; height: 52px; }
 .rolechip-cust { padding: 4px 10px; font-size: 11px; border-radius: 9999px; }
 .approw { background: #F4F6FA; border: 1px solid #E7EBF2; }
+/* Google Identity Services button overrides to prevent SVG explosion */
+.nsm7Bb-HzV7m-LgbsSe svg,
+.LgbsSe-Bz112c,
+[role="button"] svg.LgbsSe-Bz112c {
+  width: 18px !important;
+  height: 18px !important;
+  max-width: 18px !important;
+  max-height: 18px !important;
+  display: inline-block !important;
+}

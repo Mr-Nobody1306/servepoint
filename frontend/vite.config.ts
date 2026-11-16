@@ -38,10 +38,30 @@ export default defineConfig(({ mode }) => {
       watch: {
         ignored: ["**/.figma/**"],
       },
+      proxy: {
+        "/api": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+      headers: {
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+      },
     },
     preview: {
       host: process.env.FIGMA_DEV_SERVER_HOST || "0.0.0.0",
       port: parseInt(process.env.PORT || "8443"),
+      proxy: {
+        "/api": {
+          target: "http://localhost:8000",
+          changeOrigin: true,
+          secure: false,
+        },
+      },
+      headers: {
+        "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+      },
     },
   };
 });

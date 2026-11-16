@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, type AdminCustomer, type Booking, type Category, type ChatMessage, type ChatResponse, type PlatformStats, type Provider, type ProviderService, type Review, type User } from "./api";
 
 type View = "home" | "explore" | "provider" | "booking" | "customer" | "pro" | "admin";
@@ -4842,6 +4842,266 @@ function AuthModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(initialError);
 
+  // Google OAuth state
+  const googleBtnRef = useRef<HTMLDivElement>(null);
+  const [googleClientId, setGoogleClientId] = useState<string>(
+    "820543012741-h79394n4pul2dj00v446k53qu419lkjp.apps.googleusercontent.com"
+  );
+  const [unlinkedCollisionEmail, setUnlinkedCollisionEmail] = useState("");
+  const [unlinkedGoogleCredential, setUnlinkedGoogleCredential] = useState("");
+  const [linkPassword, setLinkPassword] = useState("");
+  const [linkingLoading, setLinkingLoading] = useState(false);
+  const [googleChallenge, setGoogleChallenge] = useState<{ nonce: string; challengeId: string; expiresAt?: number } | null>(null);
+  const challengeRef = useRef<{ nonce: string; challengeId: string; expiresAt?: number } | null>(null);
+  const lastInitConfigRef = useRef<{ clientId: string; nonce: string } | null>(null);
+  const handleGoogleResponseRef = useRef<any>(null);
+  const [gsiError, setGsiError] = useState("");
+
+  const formStateRef = useRef({ role, trade, area, phone, name });
+  useEffect(() => {
+    formStateRef.current = { role, trade, area, phone, name };
+  }, [role, trade, area, phone, name]);
+
+  const ensureGsiScript = (): Promise<void> => {
+    return new Promise((resolve) => {
+      if ((window as any).google?.accounts?.id) {
+        return resolve();
+      }
+      let script = document.getElementById("gsi-client") as HTMLScriptElement | null;
+      if (!script) {
+        script = document.createElement("script");
+        script.id = "gsi-client";
+        script.src = "https://accounts.google.com/gsi/client";
+        script.async = true;
+        script.defer = true;
+        document.head.appendChild(script);
+      }
+      const timer = setInterval(() => {
+        if ((window as any).google?.accounts?.id) {
+          clearInterval(timer);
+          resolve();
+        }
+      }, 100);
+
+      script.addEventListener("load", () => {
+        clearInterval(timer);
+        resolve();
+      });
+      script.addEventListener("error", () => {
+        clearInterval(timer);
+        resolve();
+      });
+
+      // Fallback timeout after 3.5 seconds
+      setTimeout(() => {
+        clearInterval(timer);
+        resolve();
+      }, 3500);
+    });
+  };
+
+  const ensureGsiInitialized = async (nonce?: string): Promise<boolean> => {
+    await ensureGsiScript();
+    const g = (window as any).google;
+    if (!g?.accounts?.id) return false;
+
+    const currentNonce = nonce || challengeRef.current?.nonce || googleChallenge?.nonce || "";
+    // Avoid redundant re-initialization if clientId and nonce have not changed
+    if (
+      lastInitConfigRef.current &&
+      lastInitConfigRef.current.clientId === googleClientId &&
+      lastInitConfigRef.current.nonce === currentNonce
+    ) {
+      return true;
+    }
+
+    try {
+      const initConfig: any = {
+        client_id: googleClientId,
+        callback: (resp: any) => {
+          if (handleGoogleResponseRef.current) {
+            handleGoogleResponseRef.current(resp);
+          }
+        },
+        auto_select: false,
+        cancel_on_tap_outside: true,
+      };
+      if (currentNonce) {
+        initConfig.nonce = currentNonce;
+      }
+      g.accounts.id.initialize(initConfig);
+      lastInitConfigRef.current = { clientId: googleClientId, nonce: currentNonce };
+      return true;
+    } catch (err) {
+      console.warn("Could not initialize Google Identity Services:", err);
+      return false;
+    }
+  };
+
+  const renderGoogleButton = useCallback(async (nonceOverride?: string) => {
+    if (!googleBtnRef.current) return;
+
+    const initialized = await ensureGsiInitialized(nonceOverride);
+    if (!initialized) {
+      setGsiError("Google Identity Services could not be loaded. Please check your network or ad-blocker.");
+      return;
+    }
+
+    const g = (window as any).google;
+    if (!g?.accounts?.id || !googleBtnRef.current) return;
+
+    try {
+      // Clean container first to guarantee no duplicate buttons or overlapping DOM
+      googleBtnRef.current.innerHTML = "";
+      g.accounts.id.renderButton(googleBtnRef.current, {
+        theme: "outline",
+        size: "large",
+        width: 320,
+        text: tab === "login" ? "continue_with" : "signup_with",
+        shape: "rectangular",
+        logo_alignment: "left",
+      });
+      setGsiError("");
+    } catch (err) {
+      console.warn("Could not render Google button:", err);
+      setGsiError("Failed to render Google Sign-In button.");
+    }
+  }, [tab, googleClientId]);
+
+  const refreshGoogleChallenge = async (isManualRetry = false): Promise<{ nonce: string; challengeId: string; expiresAt?: number } | null> => {
+    try {
+      const ch = await api.getGoogleChallenge();
+      if (ch && ch.nonce && ch.challengeId) {
+        setGoogleChallenge(ch);
+        challengeRef.current = ch;
+        setGsiError("");
+        await ensureGsiInitialized(ch.nonce);
+        await renderGoogleButton(ch.nonce);
+        return ch;
+      }
+      throw new Error("Challenge response missing required parameters");
+    } catch (err: any) {
+      console.warn("Could not fetch security challenge:", err);
+      if (isManualRetry) {
+        setGsiError("Could not refresh security challenge. Please check your network and try again.");
+      }
+      return null;
+    }
+  };
+
+  // Initial load: config and challenge
+  useEffect(() => {
+    api.getAuthConfig().then((res) => {
+      if (res && res.googleClientId) {
+        setGoogleClientId(res.googleClientId);
+      }
+    }).catch(() => {});
+
+    refreshGoogleChallenge(false);
+  }, []);
+
+  // Re-render button on tab change or client ID update without redundant re-initialization
+  useEffect(() => {
+    renderGoogleButton();
+  }, [tab, googleClientId, renderGoogleButton]);
+
+  // Auto-refresh challenge before expiry (5m TTL -> refresh at 4.5m)
+  useEffect(() => {
+    if (!googleChallenge?.expiresAt) return;
+    const timeUntilRefresh = Math.max(2000, googleChallenge.expiresAt - Date.now() - 30000);
+    const timer = setTimeout(async () => {
+      await refreshGoogleChallenge(false);
+    }, timeUntilRefresh);
+    return () => clearTimeout(timer);
+  }, [googleChallenge]);
+
+  const handleGoogleResponse = async (response: any) => {
+    if (!response || !response.credential) {
+      setError("Google sign-in did not return a valid credential.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    setUnlinkedCollisionEmail("");
+    const current = formStateRef.current;
+    try {
+      let activeChallenge = challengeRef.current || googleChallenge;
+      if (activeChallenge?.expiresAt && Date.now() > activeChallenge.expiresAt) {
+        const fresh = await refreshGoogleChallenge(false);
+        if (fresh) {
+          setError("Your security challenge expired. A fresh session has been loaded, please click 'Continue with Google' again.");
+          return;
+        }
+      }
+
+      const payload: any = {
+        credential: response.credential,
+        challengeId: activeChallenge?.challengeId,
+        role: current.role === "provider" ? "artisan" : "customer",
+      };
+      if (current.role === "provider") {
+        if (current.trade) payload.trade = current.trade;
+        if (current.area) payload.area = current.area;
+        if (current.phone) payload.phone = current.phone;
+        if (current.name) payload.name = current.name;
+      }
+      const res = await api.loginWithGoogle(payload);
+      if (res.ok && res.user) {
+        onSuccess(res.user);
+      } else {
+        setError("Google authentication could not be completed.");
+      }
+    } catch (err: any) {
+      const msg = err.message || "";
+      if (msg.includes("expired") || msg.includes("Security nonce has expired") || msg.includes("Unrecognized")) {
+        const fresh = await refreshGoogleChallenge(false);
+        if (fresh) {
+          setError("Your security session expired. A fresh session has been initialized. Please click the Google button again.");
+        } else {
+          setError("Your security session expired and refreshing the challenge failed. Please check your network connection.");
+        }
+      } else if (msg.includes("already exists") || msg.includes("ACCOUNT_EXISTS_UNLINKED")) {
+        setUnlinkedCollisionEmail(email || "your account");
+        setUnlinkedGoogleCredential(response.credential);
+      } else {
+        setError(msg || "Google sign-in failed.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+  handleGoogleResponseRef.current = handleGoogleResponse;
+
+  const handleLinkAccount = async () => {
+    setLinkingLoading(true);
+    setError("");
+    try {
+      const res = await api.loginWithGoogle({
+        credential: unlinkedGoogleCredential,
+        challengeId: challengeRef.current?.challengeId || googleChallenge?.challengeId,
+        linkPassword,
+      });
+      if (res.ok && res.user) {
+        onSuccess(res.user);
+      }
+    } catch (err: any) {
+      const msg = err.message || "";
+      if (msg.includes("expired") || msg.includes("Security nonce has expired")) {
+        const fresh = await refreshGoogleChallenge(false);
+        if (fresh) {
+          initGoogleBtn(fresh);
+          setError("Your security session expired. A fresh session has been loaded. Please try linking your account again.");
+        } else {
+          setError("Security session expired and refreshing failed. Please reload the page.");
+        }
+      } else {
+        setError(msg || "Failed to link Google account. Please check your password.");
+      }
+    } finally {
+      setLinkingLoading(false);
+    }
+  };
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!email || !password) {
@@ -4910,7 +5170,7 @@ function AuthModal({
               paddingBottom: "8px",
               cursor: "pointer",
             }}
-            onClick={() => { setTab("login"); setError(""); }}
+            onClick={() => { setTab("login"); setError(""); setUnlinkedCollisionEmail(""); }}
           >
             Sign In
           </button>
@@ -4926,7 +5186,7 @@ function AuthModal({
               paddingBottom: "8px",
               cursor: "pointer",
             }}
-            onClick={() => { setTab("register"); setError(""); }}
+            onClick={() => { setTab("register"); setError(""); setUnlinkedCollisionEmail(""); }}
           >
             Create Account
           </button>
@@ -4938,42 +5198,102 @@ function AuthModal({
           </div>
         )}
 
+        {/* Existing unlinked account collision & secure linking banner */}
+        {unlinkedCollisionEmail && (
+          <div style={{ background: "#fcf8f2", border: "1px solid #d4a373", borderRadius: "8px", padding: "14px", marginBottom: "16px" }}>
+            <div style={{ fontWeight: 600, color: "#7a4128", fontSize: "13px", marginBottom: "4px" }}>
+              Existing Account Found ({unlinkedCollisionEmail})
+            </div>
+            <div style={{ fontSize: "12px", color: "#5a4b41", marginBottom: "10px", lineHeight: 1.4 }}>
+              An account with this email already exists. Enter your password to securely link your Google account and sign in.
+            </div>
+            <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+              <input
+                type="password"
+                placeholder="Enter account password"
+                value={linkPassword}
+                onChange={(e) => setLinkPassword(e.target.value)}
+                style={{ flex: 1, minWidth: "180px", padding: "8px 12px", fontSize: "13px", borderRadius: "6px", border: "1px solid #d4a373" }}
+              />
+              <button
+                type="button"
+                className="primary-button"
+                disabled={linkingLoading || !linkPassword}
+                onClick={handleLinkAccount}
+                style={{ padding: "8px 14px", fontSize: "12px", whiteSpace: "nowrap" }}
+              >
+                {linkingLoading ? "Linking..." : "Verify & Link"}
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => { setUnlinkedCollisionEmail(""); setUnlinkedGoogleCredential(""); setLinkPassword(""); }}
+              style={{ border: 0, background: "none", fontSize: "11px", color: "#8a8984", cursor: "pointer", marginTop: "8px", textDecoration: "underline" }}
+            >
+              Cancel linking
+            </button>
+          </div>
+        )}
+
         {tab === "login" ? (
-          <form onSubmit={handleLogin}>
-            <div className="form-grid">
-              <label className="full">
-                Email Address
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. ama@example.com"
-                  autoFocus
-                />
-              </label>
-              <label className="full">
-                Password
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Enter your password"
-                />
-              </label>
+          <>
+            {/* Google Continue Option */}
+            <div style={{ marginBottom: "16px" }}>
+              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", minHeight: "44px" }} />
+              {gsiError && (
+                <div style={{ fontSize: "12px", color: "#b91c1c", textAlign: "center", marginTop: "6px" }}>
+                  {gsiError}{" "}
+                  <button type="button" onClick={() => refreshGoogleChallenge(true)} style={{ textDecoration: "underline", background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: 600 }}>
+                    Retry
+                  </button>
+                </div>
+              )}
             </div>
-            <div className="modal-actions" style={{ marginTop: "20px" }}>
-              <button type="button" onClick={() => { setTab("register"); setError(""); }}>
-                Need an account? Sign up
-              </button>
-              <button type="submit" className="primary-button" disabled={loading}>
-                {loading ? "Signing in..." : "Sign In"} <Icon name="arrow" />
-              </button>
+
+            <div style={{ display: "flex", alignItems: "center", margin: "18px 0", gap: "10px" }}>
+              <span style={{ flex: 1, height: "1px", background: "var(--line)" }} />
+              <span style={{ fontSize: "11px", letterSpacing: "0.12em", color: "#8a8984", textTransform: "uppercase", fontWeight: 600 }}>
+                or with email & password
+              </span>
+              <span style={{ flex: 1, height: "1px", background: "var(--line)" }} />
             </div>
-          </form>
+
+            <form onSubmit={handleLogin}>
+              <div className="form-grid">
+                <label className="full">
+                  Email Address
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="e.g. ama@example.com"
+                    autoFocus
+                  />
+                </label>
+                <label className="full">
+                  Password
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                  />
+                </label>
+              </div>
+              <div className="modal-actions" style={{ marginTop: "20px" }}>
+                <button type="button" onClick={() => { setTab("register"); setError(""); }}>
+                  Need an account? Sign up
+                </button>
+                <button type="submit" className="primary-button" disabled={loading}>
+                  {loading ? "Signing in..." : "Sign In"} <Icon name="arrow" />
+                </button>
+              </div>
+            </form>
+          </>
         ) : (
-          <form onSubmit={handleRegister}>
+          <>
             <div style={{ marginBottom: "16px" }}>
               <span className="kicker" style={{ display: "block", marginBottom: "8px" }}>I AM JOINING AS</span>
               <div style={{ display: "flex", gap: "10px" }}>
@@ -4996,81 +5316,147 @@ function AuthModal({
               </div>
             </div>
 
-            <div className="form-grid">
-              <label className="full">
-                Full Name
-                <input
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder={role === "provider" ? "e.g. Kwame Ofori" : "e.g. Ama Boateng"}
-                  autoFocus
-                />
-              </label>
-              <label>
-                Email Address
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="e.g. yourname@example.com"
-                />
-              </label>
-              <label>
-                Password
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 6 characters"
-                />
-              </label>
-              <label>
-                Phone Number
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+233 24 000 0000"
-                />
-              </label>
-              <label>
-                Location / Area
-                <input
-                  value={area}
-                  onChange={(e) => setArea(e.target.value)}
-                  placeholder="e.g. East Legon, Adenta, Osu"
-                />
-              </label>
+            {role === "provider" && (
+              <div style={{ background: "#f8f5ee", border: "1px solid var(--line)", borderRadius: "8px", padding: "12px 14px", marginBottom: "16px" }}>
+                <span className="kicker" style={{ display: "block", marginBottom: "6px" }}>SERVICE PROVIDER DETAILS</span>
+                <div className="form-grid" style={{ gap: "10px" }}>
+                  <label className="full">
+                    Primary Trade Category
+                    <select value={trade} onChange={(e) => setTrade(e.target.value)} style={{ padding: "8px 10px", fontSize: "13px" }}>
+                      <option>Carpentry & Woodwork</option>
+                      <option>Plumbing</option>
+                      <option>Electrical Services</option>
+                      <option>Painting & Wall Finishing</option>
+                      <option>Masonry & Construction</option>
+                      <option>Cleaning & Home Care</option>
+                      <option>Appliance & Gadget Repairs</option>
+                      <option>Air Conditioning & Ventilation</option>
+                      <option>Home Installation & Assembly</option>
+                    </select>
+                  </label>
+                  <label>
+                    Service Area
+                    <input
+                      value={area}
+                      onChange={(e) => setArea(e.target.value)}
+                      placeholder="e.g. Adenta, East Legon"
+                      style={{ padding: "8px 10px", fontSize: "13px" }}
+                    />
+                  </label>
+                  <label>
+                    Contact Phone
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+233 24 000 0000"
+                      style={{ padding: "8px 10px", fontSize: "13px" }}
+                    />
+                  </label>
+                </div>
+                <small style={{ display: "block", color: "#8a7852", marginTop: "8px", fontSize: "11px" }}>
+                  ℹ️ Provider applications are placed in the verification queue for administrator review before receiving bookings.
+                </small>
+              </div>
+            )}
 
-              {role === "provider" && (
-                <label className="full">
-                  Primary Trade Category
-                  <select value={trade} onChange={(e) => setTrade(e.target.value)}>
-                    <option>Carpentry & Woodwork</option>
-                    <option>Plumbing</option>
-                    <option>Electrical Services</option>
-                    <option>Painting & Wall Finishing</option>
-                    <option>Masonry & Construction</option>
-                    <option>Cleaning & Home Care</option>
-                    <option>Appliance & Gadget Repairs</option>
-                    <option>Air Conditioning & Ventilation</option>
-                    <option>Home Installation & Assembly</option>
-                  </select>
-                </label>
+            {/* Google Sign-up Option */}
+            <div style={{ marginBottom: "16px" }}>
+              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", minHeight: "44px" }} />
+              {gsiError && (
+                <div style={{ fontSize: "12px", color: "#b91c1c", textAlign: "center", marginTop: "6px" }}>
+                  {gsiError}{" "}
+                  <button type="button" onClick={() => refreshGoogleChallenge(true)} style={{ textDecoration: "underline", background: "none", border: "none", color: "inherit", cursor: "pointer", fontWeight: 600 }}>
+                    Retry
+                  </button>
+                </div>
               )}
             </div>
 
-            <div className="modal-actions" style={{ marginTop: "20px" }}>
-              <button type="button" onClick={() => { setTab("login"); setError(""); }}>
-                Already registered? Sign in
-              </button>
-              <button type="submit" className="primary-button" disabled={loading}>
-                {loading ? "Creating account..." : "Complete Registration"} <Icon name="arrow" />
-              </button>
+            <div style={{ display: "flex", alignItems: "center", margin: "18px 0", gap: "10px" }}>
+              <span style={{ flex: 1, height: "1px", background: "var(--line)" }} />
+              <span style={{ fontSize: "11px", letterSpacing: "0.12em", color: "#8a8984", textTransform: "uppercase", fontWeight: 600 }}>
+                or with email & password
+              </span>
+              <span style={{ flex: 1, height: "1px", background: "var(--line)" }} />
             </div>
-          </form>
+
+            <form onSubmit={handleRegister}>
+              <div className="form-grid">
+                <label className="full">
+                  Full Name
+                  <input
+                    required
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder={role === "provider" ? "e.g. Kwame Ofori" : "e.g. Ama Boateng"}
+                    autoFocus
+                  />
+                </label>
+                <label>
+                  Email Address
+                  <input
+                    type="email"
+                    required
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="e.g. yourname@example.com"
+                  />
+                </label>
+                <label>
+                  Password
+                  <input
+                    type="password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                  />
+                </label>
+                <label>
+                  Phone Number
+                  <input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="+233 24 000 0000"
+                  />
+                </label>
+                <label>
+                  Location / Area
+                  <input
+                    value={area}
+                    onChange={(e) => setArea(e.target.value)}
+                    placeholder="e.g. East Legon, Adenta, Osu"
+                  />
+                </label>
+
+                {role === "provider" && (
+                  <label className="full">
+                    Primary Trade Category
+                    <select value={trade} onChange={(e) => setTrade(e.target.value)}>
+                      <option>Carpentry & Woodwork</option>
+                      <option>Plumbing</option>
+                      <option>Electrical Services</option>
+                      <option>Painting & Wall Finishing</option>
+                      <option>Masonry & Construction</option>
+                      <option>Cleaning & Home Care</option>
+                      <option>Appliance & Gadget Repairs</option>
+                      <option>Air Conditioning & Ventilation</option>
+                      <option>Home Installation & Assembly</option>
+                    </select>
+                  </label>
+                )}
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: "20px" }}>
+                <button type="button" onClick={() => { setTab("login"); setError(""); }}>
+                  Already registered? Sign in
+                </button>
+                <button type="submit" className="primary-button" disabled={loading}>
+                  {loading ? "Creating account..." : "Complete Registration"} <Icon name="arrow" />
+                </button>
+              </div>
+            </form>
+          </>
         )}
       </div>
     </Modal>
