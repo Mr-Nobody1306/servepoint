@@ -22,15 +22,115 @@
 * {
   box-sizing: border-box;
 }
-/* Google Identity Services button overrides to prevent SVG explosion */
+/* Google Identity Services Button Styles (Self-hosted for CSP compliance) */
+.L6cTce {
+  display: none !important;
+}
+
+.S9gUrf-YoZ4jf,
+.S9gUrf-YoZ4jf * {
+  border: none;
+  margin: 0;
+  padding: 0;
+}
+
+.S9gUrf-YoZ4jf {
+  position: relative !important;
+  width: 100% !important;
+  max-width: 320px !important;
+  display: flex !important;
+  justify-content: center !important;
+}
+
+.nsm7Bb-HzV7m-LgbsSe {
+  border-radius: 4px;
+  box-sizing: border-box !important;
+  transition: background-color .218s, border-color .218s;
+  user-select: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+  background-image: none;
+  border: 1px solid #dadce0 !important;
+  color: #3c4043 !important;
+  cursor: pointer;
+  font-family: "Google Sans", Roboto, Arial, sans-serif !important;
+  font-size: 14px !important;
+  height: 40px !important;
+  letter-spacing: 0.25px;
+  outline: none;
+  overflow: hidden !important;
+  padding: 0 12px !important;
+  position: relative !important;
+  text-align: center;
+  vertical-align: middle;
+  white-space: nowrap !important;
+  width: 100% !important;
+  max-width: 320px !important;
+  min-width: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.nsm7Bb-HzV7m-LgbsSe:hover {
+  background-color: #f7f8f8;
+  border-color: #d2e3fc;
+}
+
+.nsm7Bb-HzV7m-LgbsSe .nsm7Bb-HzV7m-LgbsSe-MJoBVe {
+  border-radius: 3px;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+
+.nsm7Bb-HzV7m-LgbsSe .nsm7Bb-HzV7m-LgbsSe-bN97Pc-sM5MNb {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  width: 100% !important;
+  height: 100% !important;
+  overflow: hidden !important;
+}
+
+.nsm7Bb-HzV7m-LgbsSe .nsm7Bb-HzV7m-LgbsSe-Bz112c {
+  height: 18px !important;
+  width: 18px !important;
+  min-width: 18px !important;
+  max-width: 18px !important;
+  margin-right: 10px !important;
+  flex-shrink: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.nsm7Bb-HzV7m-LgbsSe .nsm7Bb-HzV7m-LgbsSe-Bz112c svg,
+.nsm7Bb-HzV7m-LgbsSe svg.LgbsSe-Bz112c,
 .nsm7Bb-HzV7m-LgbsSe svg,
 .LgbsSe-Bz112c,
 [role="button"] svg.LgbsSe-Bz112c {
-  width: 18px !important;
   height: 18px !important;
+  width: 18px !important;
+  min-width: 18px !important;
   max-width: 18px !important;
   max-height: 18px !important;
-  display: inline-block !important;
+  display: block !important;
+}
+
+.nsm7Bb-HzV7m-LgbsSe .nsm7Bb-HzV7m-LgbsSe-BPrWId {
+  flex-grow: 0 !important;
+  font-family: "Google Sans", Roboto, Arial, sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 500 !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+  vertical-align: middle !important;
+  color: #3c4043 !important;
+  white-space: nowrap !important;
 }
 html {
   scroll-behavior: smooth;

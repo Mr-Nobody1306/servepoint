@@ -5239,7 +5239,7 @@ function AuthModal({
           <>
             {/* Google Continue Option */}
             <div style={{ marginBottom: "16px" }}>
-              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", minHeight: "44px" }} />
+              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", width: "100%", maxWidth: "320px", margin: "0 auto", minHeight: "44px" }} />
               {gsiError && (
                 <div style={{ fontSize: "12px", color: "#b91c1c", textAlign: "center", marginTop: "6px" }}>
                   {gsiError}{" "}
@@ -5361,7 +5361,7 @@ function AuthModal({
 
             {/* Google Sign-up Option */}
             <div style={{ marginBottom: "16px" }}>
-              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", minHeight: "44px" }} />
+              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", width: "100%", maxWidth: "320px", margin: "0 auto", minHeight: "44px" }} />
               {gsiError && (
                 <div style={{ fontSize: "12px", color: "#b91c1c", textAlign: "center", marginTop: "6px" }}>
                   {gsiError}{" "}
