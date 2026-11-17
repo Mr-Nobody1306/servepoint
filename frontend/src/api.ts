@@ -144,6 +144,7 @@ export interface ChatResponse {
 }
 
 const API_BASE = "";
+const CHAT_MESSAGE_LIMIT = 12;
 
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const token = localStorage.getItem("servepoint_token") || "";
@@ -460,7 +461,7 @@ export const api = {
   async sendChatMessage(messages: ChatMessage[]): Promise<ChatResponse> {
     return request<ChatResponse>("/api/chat", {
       method: "POST",
-      body: JSON.stringify({ messages }),
+      body: JSON.stringify({ messages: messages.slice(-CHAT_MESSAGE_LIMIT) }),
     });
   },
 };
