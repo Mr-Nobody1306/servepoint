@@ -27,7 +27,7 @@ function loadConfig() {
   const cfg = {
     port: Number(process.env.PORT || 8000),
     groqBaseUrl: String(process.env.GROQ_BASE_URL || "https://api.groq.com/openai/v1").replace(/\/+$/, ""),
-    groqModel: process.env.GROQ_MODEL || "llama-3.1-8b-instant",
+    groqModel: process.env.GROQ_MODEL || "openai/gpt-oss-120b",
     groqKey: process.env.GROQ_API_KEY || "",
     supabaseUrl: String(process.env.SUPABASE_URL || "").replace(/\/+$/, ""),
     supabaseAnonKey: process.env.SUPABASE_ANON_KEY || "",
