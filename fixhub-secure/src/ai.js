@@ -9,7 +9,7 @@ async function completeGroq(opts, messages, o2) {
     upstream = await fetch(opts.baseUrl + "/chat/completions", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Authorization": "Bearer " + opts.apiKey },
-      body: JSON.stringify({ model: opts.model, messages: messages, temperature: 0.4, max_tokens: 300 }),
+      body: JSON.stringify({ model: opts.model, messages: messages, temperature: 0.4, max_completion_tokens: 300 }),
       signal: ctrl.signal
     });
   } catch (err) {

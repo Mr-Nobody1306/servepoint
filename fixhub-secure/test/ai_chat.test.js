@@ -2,6 +2,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { describe, it, beforeEach } = test;
+const { completeGroq } = require("../src/ai");
 const {
   SERVICES,
   parseAnswer,
@@ -40,6 +41,32 @@ function mockRes() {
 }
 
 describe("Phase 1: AI Assistant & Diagnosis (FR-27 to FR-33)", function () {
+  it("uses Groq's current completion-token request field", async function () {
+    const originalFetch = global.fetch;
+    let requestBody;
+    global.fetch = async function (_url, options) {
+      requestBody = JSON.parse(options.body);
+      return {
+        ok: true,
+        json: async function () {
+          return { choices: [{ message: { content: "{\"reply\":\"I can help.\",\"service\":null,\"detail\":\"\"}" } }] };
+        }
+      };
+    };
+    try {
+      await completeGroq(
+        { baseUrl: "https://api.groq.com/openai/v1", model: "openai/gpt-oss-20b", apiKey: "test-key" },
+        [{ role: "user", content: "Hi" }],
+        { timeoutMs: 1000 }
+      );
+      assert.strictEqual(requestBody.model, "openai/gpt-oss-20b");
+      assert.strictEqual(requestBody.max_completion_tokens, 300);
+      assert.strictEqual(requestBody.max_tokens, undefined);
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+
   it("FR-28/FR-30: SERVICES allowlist contains exactly the 9 approved platform categories", function () {
     const expected = [
       "plumbing",
